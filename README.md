@@ -9,7 +9,7 @@ O SDK faz duas coisas:
 
 Ele não tem dependências e funciona no Node 18.17 ou mais novo.
 
-> Esta versão (0.1) cuida só da conexão. O resgate das figurinhas (liberar o plano para quem trocou) chega na 0.2.
+> Versão 0.2: batimento, resgate de assinaturas e checagem de situação.
 
 ## Passo a passo
 
@@ -41,7 +41,9 @@ Grave as chaves no `.env`. O comando não apaga nada que já estiver lá:
 npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 ```
 
-### 4. Monte a rota
+### 4. Monte o SDK: batimento + resgate
+
+O SDK cuida de três rotas no seu site (`/escambo/status`, `/escambo/resgatar` e `/escambo/situacao`) e do batimento.
 
 **Express / Connect / Node http**
 
@@ -50,41 +52,66 @@ import express from 'express';
 import {criarEscambo} from '@rande/escambo';
 
 const app = express();
-const escambo = criarEscambo();   // lê ESCAMBO_APP_ID e ESCAMBO_SEGREDO
-app.use(escambo.middleware);      // responde em /escambo/status
-escambo.iniciar();                // começa a pingar o Escambo
+const escambo = criarEscambo({
+  // Quem pegou uma assinatura no Escambo abre /escambo/resgatar?token=… LOGADO no seu SaaS.
+  // Libere o plano grátis pela duração e devolva o id da conta. Sem login? Mande para o login e volte.
+  async resgatar({plano, meses, teste, req}) {
+    const usuario = await usuarioLogado(req);              // a sua função de sessão
+    if (!usuario) return {redirecionar: '/login?voltar=' + encodeURIComponent(req.originalUrl)};
+    if (!teste) await liberarPlano(usuario.id, plano, meses); // ex.: plano Pro grátis por N meses
+    return {usuario: usuario.id};                          // o Escambo guarda esse id
+  },
+  // Uma vez por semana o Escambo pergunta se a assinatura continua ativa para aquela conta.
+  async situacao({usuario}) {
+    return (await planoAtivo(usuario)) ? 'ativa' : 'cancelada';
+  },
+});
+app.use(escambo.middleware);   // responde em /escambo/*
+escambo.iniciar();             // batimento a cada 60 s
 ```
 
-**Next.js (App Router)**: crie `app/escambo/status/route.js`:
+**Next.js (App Router)**: crie `app/escambo/[...rota]/route.js`:
 
 ```js
 import {criarEscambo} from '@rande/escambo';
-const escambo = criarEscambo();
+const escambo = criarEscambo({resgatar: async ({request}) => {/* ... */}, situacao: async () => 'ativa'});
 export const dynamic = 'force-dynamic';
 export async function GET(request) {
   return (await escambo.responder(request)) ?? new Response('Not found', {status: 404});
 }
 ```
 
-Em serverless (Vercel, Netlify, Workers), não use `iniciar()`, porque o processo não fica vivo. Chame `await escambo.ping()` num cron de hora em hora. O Escambo também checa o seu site sozinho, então a conexão aparece mesmo sem ping.
+No `responder`, a sua função `resgatar` recebe o `Request` em `req`.
 
-**Hono, Bun, Deno ou qualquer runtime com `Request`/`Response`**: use `escambo.responder(request)`. Ele devolve `null` fora da rota.
+**Serverless (Vercel, Netlify, Workers):** o processo não fica vivo, então não use `iniciar()`. Chame `await escambo.ping()` num cron de 1 em 1 minuto. Sem batimento, o Escambo mostra o SaaS como instável em 3 min e desconectado em 10 min.
 
 ### 5. Teste
 
 ```bash
-npx escambo testar https://seu-dominio.com   # faz o mesmo pedido que o Escambo
-npx escambo ping                             # avisa o Escambo agora
+npx escambo ping                             # o SDK manda um batimento agora
+npx escambo testar https://seu-dominio.com   # faz o mesmo pedido que o Escambo faz em /escambo/status
 ```
 
-No app, o passo **Conecte o SDK** muda para **Conectado** assim que chega o primeiro ping.
+No app, na etapa **Conecte o SDK**, toque em **Testar resgate**. O Escambo gera um token de teste e você abre o link logado no seu SaaS. Se a sua função `resgatar` devolver `{usuario}`, a etapa fica ✓, sem gastar conchas de ninguém.
+
+## Como o resgate é protegido
+
+- O token é de uso único. Ele só funciona no SaaS dono do App ID e morre quando o resgate é confirmado.
+- O SDK confere o token e confirma o resgate com chamadas assinadas com o seu token secreto, então o navegador do cliente não consegue forjar nada.
+- Toda chamada leva um nonce e o horário, e uma resposta capturada não serve de novo.
+- O Escambo cruza três sinais:
+  - o batimento: se o seu servidor parar, ele percebe em minutos;
+  - a resposta de `situacao()`;
+  - a confirmação do comprador: "o resgate deu certo?" e o "está tudo certo?" semanal.
+
+  Se o comprador disser que não funcionou, ele é reembolsado e você devolve as conchas. Penalidade só acontece com várias denúncias de compradores diferentes.
 
 ## API
 
 | | |
 |---|---|
-| `criarEscambo({appId, segredo, caminho, base, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. |
-| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status` e chama `next()` no resto. |
+| `criarEscambo({appId, segredo, caminho, base, resgatar, situacao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. |
+| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar` e `/situacao` e chama `next()` no resto. |
 | `escambo.responder(request)` | Mesma coisa para `Request`. Devolve `Response` ou `null`. |
 | `escambo.ping()` | Manda um ping assinado. Devolve `{ok, estado, proximo_ping_s}`. |
 | `escambo.iniciar()` / `parar()` | Liga ou desliga os pings automáticos. |

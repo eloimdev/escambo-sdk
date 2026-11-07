@@ -53,3 +53,29 @@ Resposta:
 ```
 
 Use `proximo_ping_s` para marcar o próximo ping.
+
+## Resgate (SaaS → Escambo, assinado como o ping)
+
+As chamadas são assinadas como o ping, com a mensagem `escambo-{acao}.v1.{app_id}.{ts}.{nonce}.{sha256 do corpo}`.
+
+```
+POST /v1/escambo/sdk/resgate/consultar   (acao = resgate-consultar)   {"token":"esc_rg_..."}
+→ {"assinatura":{"id","plano","plano_id","meses","teste","comprador":{"nome"}}}
+
+POST /v1/escambo/sdk/resgate/confirmar   (acao = resgate-confirmar)   {"token":"esc_rg_...","usuario":"id-da-conta-no-saas"}
+→ {"ok":true,"assinatura":{"id","expira","teste"}}
+```
+
+O token é de uso único: depois de confirmado, `consultar` e `confirmar` respondem `409`.
+
+## Situação (Escambo → SaaS)
+
+```
+GET {url}{caminho}/situacao?assinatura=&usuario=&desafio=&ts=
+X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-situacao.v1.{app}.{assinatura}.{usuario}.{desafio}.{ts}")
+→ {"situacao":"ativa"|"cancelada"|"desconhecida","prova":HMAC(segredo,"escambo-situacao-resp.v1.{app}.{assinatura}.{situacao}.{desafio}.{ts}")}
+```
+
+## Batimento
+
+O Escambo responde ao ping com `proximo_ping_s: 60`. Sem ping há 3 min, o estado vira `instavel`; há 10 min, `desconectado`.

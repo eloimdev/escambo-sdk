@@ -7,6 +7,11 @@ export interface OpcoesEscambo {
   caminho?: string;
   base?: string;
   log?: (evento: string, dados?: Record<string, unknown>) => void;
+  token?: string;
+  depoisDoResgate?: string;
+  resgatar?: (ctx: {id: string; plano: string; plano_id: string; meses: number; teste: boolean; comprador: {nome: string}; token: string; req: unknown}) =>
+    Promise<{usuario: string; destino?: string} | {redirecionar: string}>;
+  situacao?: (ctx: {assinatura: string; usuario: string}) => Promise<'ativa' | 'cancelada' | 'desconhecida'>;
 }
 export interface RespostaPing {
   ok: boolean;
@@ -29,6 +34,7 @@ export interface Escambo {
   status(): StatusEscambo;
   readonly caminho: string;
   readonly appId: string;
+  readonly recursos: string[];
 }
 export declare function criarEscambo(opcoes?: OpcoesEscambo): Escambo;
 export declare const PROTOCOLO: {
