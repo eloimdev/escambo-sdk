@@ -2,14 +2,17 @@
 
 Conecta o seu SaaS ao **Escambo**, o lugar onde donos de SaaS trocam assinaturas entre si.
 
-O SDK faz duas coisas:
+O SDK cuida de tudo o que liga o seu SaaS ao Escambo, sempre assinado com o seu segredo (HMAC) e com proteção contra repetição:
 
-1. **Responde ao Escambo** em `GET /escambo/status`. O Escambo manda um desafio assinado e o SDK devolve uma prova, feita com o seu segredo. Assim o Escambo sabe que o seu site está no ar e que a integração é sua.
-2. **Avisa o Escambo** com um ping assinado. Até conectar, o ping é frequente: a cada 30 s nos primeiros 5 min, depois a cada 5 min. Depois de conectar, é 1 vez por hora no primeiro dia e 1 vez por dia daí em diante.
+1. **Batimento:** um ping a cada 60 s diz que o seu servidor está no ar. Sem ping há 3 min, o SaaS aparece instável; há 10 min, desconectado.
+2. **Resgate:** quem pegou uma assinatura no Escambo abre o link de resgate (vale 72 h) logado no seu SaaS, e a sua função `resgatar()` libera o plano.
+3. **Situação:** uma vez por semana o Escambo pergunta se a assinatura continua ativa (`situacao()`).
+4. **Conversão (0.4):** depois que a troca acaba, o Escambo pergunta se aquela conta virou cliente pagante (`conversao()`, só sim/não).
+5. **Fim da troca (0.5):** 7 dias antes do fim e quando acaba, o Escambo avisa o seu app e manda a sua oferta de saída (`fimDaTroca()`).
 
 Ele não tem dependências e funciona no Node 18.17 ou mais novo.
 
-> Versão 0.2: batimento, resgate de assinaturas e checagem de situação.
+> Versão atual: **0.5.0**. Mantenha o SDK atualizado: 30 dias numa versão velha deixam o SaaS em dormência.
 
 ## Passo a passo
 
@@ -45,7 +48,7 @@ npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 
 O SDK cuida das rotas no seu site (`/escambo/status`, `/escambo/resgatar`, `/escambo/situacao` e, desde a 0.4, `/escambo/conversao`) e do batimento.
 
-**Novo na 0.5 — fim da troca e oferta de saída no seu app.** Passe `fimDaTroca: async ({usuario, momento, expira, plano, oferta}) => {...}`. O Escambo avisa 7 dias antes do fim (`momento: "perto"`) e quando acaba (`"fim"`), assinado. Se você cadastrou uma oferta de saída marcada para o SDK, ela vem em `oferta` (`{texto, codigo, link}`): mostre no seu app para a pessoa renovar com desconto. Rota: `POST {caminho}/fim`.
+**Novo na 0.5 — fim da troca e oferta de saída no seu app.** Passe `fimDaTroca: async ({usuario, momento, expira, plano, oferta}) => {...}`. O Escambo avisa 7 dias antes do fim (`momento: "perto"`) e quando acaba (`"fim"`), uma vez cada, assinado. Se você cadastrou no painel uma oferta de saída marcada para "no seu app", ela vem em `oferta` (`{texto, codigo, link}`). O `texto` é o que você escreveu, do jeito que escreveu (o Escambo não interpreta percentuais): mostre na sua tela de renovação, e use `codigo`/`link` para aplicar o desconto no seu checkout. Rota: `POST {caminho}/fim` (no Next.js, exporte também o `POST`).
 
 **Novo na 0.4 — conversão depois da troca.** Passe `conversao: async ({usuario}) => clientePagante(usuario)` (true/false). Uns dias depois que a troca termina, o Escambo pergunta (assinado) se aquela conta virou cliente pagante e mostra no seu painel quantas trocas viraram clientes. Só sai sim ou não do seu servidor.
 
@@ -69,6 +72,14 @@ const escambo = criarEscambo({
   async situacao({usuario}) {
     return (await planoAtivo(usuario)) ? 'ativa' : 'cancelada';
   },
+  // 0.4: depois que a troca acaba, essa conta virou cliente pagante?
+  async conversao({usuario}) {
+    return await clientePagante(usuario);                  // true/false
+  },
+  // 0.5: a troca está acabando ('perto') ou acabou ('fim'); oferta = a sua oferta de saída, se for para o app
+  async fimDaTroca({usuario, momento, expira, oferta}) {
+    await guardarAvisoDeRenovacao(usuario, {momento, expira, oferta}); // mostre na próxima vez que a pessoa entrar
+  },
 });
 app.use(escambo.middleware);   // responde em /escambo/*
 escambo.iniciar();             // batimento a cada 60 s
@@ -83,6 +94,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request) {
   return (await escambo.responder(request)) ?? new Response('Not found', {status: 404});
 }
+export const POST = GET; // 0.5: o aviso de fim da troca chega por POST {caminho}/fim
 ```
 
 No `responder`, a sua função `resgatar` recebe o `Request` em `req`.
@@ -138,8 +150,8 @@ No app, na etapa **Conecte o SDK**, toque em **Testar resgate**. O Escambo gera 
 
 | | |
 |---|---|
-| `criarEscambo({apps, appId, segredo, caminho, base, resgatar, situacao, conversao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. Vários SaaS no mesmo site: `apps: [{appId, segredo, resgatar?, situacao?}]`. |
-| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar`, `/situacao` e `/conversao` e chama `next()` no resto. |
+| `criarEscambo({apps, appId, segredo, caminho, base, resgatar, situacao, conversao, fimDaTroca, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. Vários SaaS no mesmo site: `apps: [{appId, segredo, resgatar?, situacao?}]`. |
+| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar`, `/situacao`, `/conversao` e `POST /fim`, e chama `next()` no resto. |
 | `escambo.responder(request)` | Mesma coisa para `Request`. Devolve `Response` ou `null`. |
 | `escambo.ping()` | Manda um ping assinado por App ID. Com um só, devolve `{ok, estado, proximo_ping_s}`; com vários, `{ok, apps: [...]}`. |
 | `escambo.iniciar()` / `parar()` | Liga ou desliga os pings automáticos. |
