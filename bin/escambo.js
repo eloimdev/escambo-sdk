@@ -35,10 +35,19 @@ async function main() {
     const arq = path.resolve('.env');
     const atual = fs.existsSync(arq) ? fs.readFileSync(arq, 'utf8') : '';
     const linhas = [];
-    if (!/^ESCAMBO_APP_ID=/m.test(atual)) linhas.push('ESCAMBO_APP_ID=' + app);
-    if (!/^ESCAMBO_SEGREDO=/m.test(atual)) linhas.push('ESCAMBO_SEGREDO=' + segredo);
+    const ids = atual.match(/^ESCAMBO_APP_ID=(.*)$/m), sks = atual.match(/^ESCAMBO_SEGREDO=(.*)$/m);
+    if (ids && sks) {
+      // Outro SaaS no mesmo site: entra na lista (mesma ordem nas duas variáveis).
+      const lista = ids[1].split(',').map((x) => x.trim()).filter(Boolean);
+      if (lista.includes(app)) return ok('.env já tem o App ' + app + '. Para trocar o token, edite o arquivo.');
+      const novo = atual.replace(/^ESCAMBO_APP_ID=.*$/m, 'ESCAMBO_APP_ID=' + [...lista, app].join(','))
+        .replace(/^ESCAMBO_SEGREDO=.*$/m, 'ESCAMBO_SEGREDO=' + [...sks[1].split(',').map((x) => x.trim()).filter(Boolean), segredo].join(','));
+      fs.writeFileSync(arq, novo);
+      return ok('App ' + app + ' adicionado à lista em .env (agora são ' + (lista.length + 1) + ' SaaS neste servidor).');
+    }
+    if (!ids) linhas.push('ESCAMBO_APP_ID=' + app);
+    if (!sks) linhas.push('ESCAMBO_SEGREDO=' + segredo);
     if (caminho && !/^ESCAMBO_CAMINHO=/m.test(atual)) linhas.push('ESCAMBO_CAMINHO=' + caminho);
-    if (!linhas.length) return ok('.env já tem as chaves do Escambo. Para trocar, edite o arquivo.');
     fs.appendFileSync(arq, (atual && !atual.endsWith('\n') ? '\n' : '') + '# Escambo\n' + linhas.join('\n') + '\n');
     ok('Chaves gravadas em .env. Confira se .env está no .gitignore.');
     const gi = path.resolve('.gitignore');
@@ -61,28 +70,36 @@ async function main() {
   if (comando === 'testar') {
     const site = String(args[0] || '').replace(/\/+$/, '');
     if (!/^https?:\/\//.test(site)) return erro('Use: escambo testar https://seu-dominio.com');
-    const app = process.env.ESCAMBO_APP_ID, segredo = process.env.ESCAMBO_SEGREDO, caminho = (process.env.ESCAMBO_CAMINHO || '/escambo');
-    if (!app || !segredo) return erro('Defina ESCAMBO_APP_ID e ESCAMBO_SEGREDO (ou rode escambo init).');
+    const caminho = (process.env.ESCAMBO_CAMINHO || '/escambo');
+    const apps = String(process.env.ESCAMBO_APP_ID || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const sks = String(process.env.ESCAMBO_SEGREDO || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!apps.length || apps.length !== sks.length) return erro('Defina ESCAMBO_APP_ID e ESCAMBO_SEGREDO (ou rode escambo init).');
+    for (let i = 0; i < apps.length; i++) if (!(await testar(site, caminho, apps[i], sks[i]))) return;
+    return;
+  }
+  async function testar(site, caminho, app, segredo) {
     const desafio = randomBytes(16).toString('hex'), ts = Math.floor(Date.now() / 1000);
     const assinatura = createHmac('sha256', segredo).update(PROTOCOLO.pedido(app, desafio, ts)).digest('hex');
     const alvo = site + caminho + '/status?desafio=' + desafio + '&ts=' + ts;
     let r;
     try {r = await fetch(alvo, {headers: {'X-Escambo-App': app, 'X-Escambo-Assinatura': assinatura}, redirect: 'manual', signal: AbortSignal.timeout(8000)});}
-    catch (e) {return erro('Não consegui abrir ' + alvo + ': ' + (e?.cause?.code || e.message));}
+    catch (e) {erro('Não consegui abrir ' + alvo + ': ' + (e?.cause?.code || e.message)); return false;}
     const j = await r.json().catch(() => null);
-    if (r.status === 404) return erro('404 em ' + caminho + '/status. O middleware do Escambo está montado?');
-    if (r.status !== 200) return erro('A rota respondeu ' + r.status + (j?.erro ? ' (' + j.erro + ')' : '') + '.');
+    if (r.status === 404) {erro('404 em ' + caminho + '/status. O middleware do Escambo está montado?'); return false;}
+    if (r.status !== 200) {erro(app + ': a rota respondeu ' + r.status + (j?.erro ? ' (' + j.erro + ')' : '') + '.'); return false;}
     const esperado = createHmac('sha256', segredo).update(PROTOCOLO.status(app, desafio, ts)).digest('hex');
-    if (j?.prova !== esperado) return erro('A prova não confere. O servidor usa o mesmo ESCAMBO_SEGREDO?');
-    ok('Rota ' + caminho + '/status respondeu certo (' + (j.sdk || 'sdk') + '). O Escambo vai conseguir checar o seu site.');
-    return;
+    if (j?.prova !== esperado) {erro(app + ': a prova não confere. O servidor usa o mesmo ESCAMBO_SEGREDO?'); return false;}
+    ok(app + ': ' + caminho + '/status respondeu certo (' + (j.sdk || 'sdk') + ').');
+    return true;
   }
   if (comando === 'ping') {
     let esc;
     try {esc = criarEscambo();} catch (e) {return erro(e.message);}
     const r = await esc.ping();
-    if (r.ok) ok('Ping aceito. Estado no Escambo: ' + r.estado + '. Próximo ping em ' + r.proximo_ping_s + ' s.');
-    else erro('Ping recusado: ' + r.erro);
+    for (const x of r.apps || [r]) {
+      if (x.ok) ok('Ping aceito' + (r.apps ? ' (' + x.appId + ')' : '') + '. Estado no Escambo: ' + x.estado + '. Próximo ping em ' + x.proximo_ping_s + ' s.');
+      else erro('Ping recusado' + (r.apps ? ' (' + x.appId + ')' : '') + ': ' + x.erro);
+    }
     return;
   }
   console.log(ajuda);

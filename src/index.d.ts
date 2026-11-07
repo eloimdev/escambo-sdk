@@ -1,7 +1,20 @@
 import type {IncomingMessage, ServerResponse} from 'node:http';
 
 export declare const VERSAO: string;
+type Resgatar = (ctx: {appId: string; id: string; plano: string; plano_id: string; meses: number; teste: boolean; comprador: {nome: string}; token: string; req: unknown}) =>
+    Promise<{usuario: string; destino?: string} | {redirecionar: string}>;
+type Situacao = (ctx: {appId: string; assinatura: string; usuario: string}) => Promise<'ativa' | 'cancelada' | 'desconhecida'>;
+/** Um SaaS no Escambo. Vários SaaS do mesmo domínio = vários itens, cada um com o seu App ID. */
+export interface AppEscambo {
+  appId: string;
+  segredo?: string;
+  token?: string;
+  resgatar?: Resgatar;
+  situacao?: Situacao;
+  depoisDoResgate?: string;
+}
 export interface OpcoesEscambo {
+  apps?: AppEscambo[];
   appId?: string;
   segredo?: string;
   caminho?: string;
@@ -9,9 +22,8 @@ export interface OpcoesEscambo {
   log?: (evento: string, dados?: Record<string, unknown>) => void;
   token?: string;
   depoisDoResgate?: string;
-  resgatar?: (ctx: {id: string; plano: string; plano_id: string; meses: number; teste: boolean; comprador: {nome: string}; token: string; req: unknown}) =>
-    Promise<{usuario: string; destino?: string} | {redirecionar: string}>;
-  situacao?: (ctx: {assinatura: string; usuario: string}) => Promise<'ativa' | 'cancelada' | 'desconhecida'>;
+  resgatar?: Resgatar;
+  situacao?: Situacao;
 }
 export interface RespostaPing {
   ok: boolean;
@@ -20,10 +32,16 @@ export interface RespostaPing {
   servidor_ts?: number;
   status?: number;
   erro?: string;
+  appId?: string;
+  /** Só com vários App IDs: o resultado de cada um. */
+  apps?: RespostaPing[];
 }
-export interface StatusEscambo {
-  appId: string; caminho: string; base: string; conectado: boolean;
-  estado: string | null; ultimoPing: number | null; proximoPing: number | null; ultimoErro: string | null;
+export interface StatusApp {
+  appId: string; recursos: string[]; conectado: boolean;
+  estado: string | null; ultimoPing: number | null; ultimoErro: string | null;
+}
+export interface StatusEscambo extends Partial<StatusApp> {
+  caminho: string; base: string; recursos: string[]; proximoPing: number | null; apps: StatusApp[];
 }
 export interface Escambo {
   middleware(req: IncomingMessage & {originalUrl?: string}, res: ServerResponse, next?: () => void): void;
@@ -34,6 +52,7 @@ export interface Escambo {
   status(): StatusEscambo;
   readonly caminho: string;
   readonly appId: string;
+  readonly appIds: string[];
   readonly recursos: string[];
 }
 export declare function criarEscambo(opcoes?: OpcoesEscambo): Escambo;

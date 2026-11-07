@@ -19,19 +19,9 @@ O SaaS confere o app, o relógio e a assinatura. Se estiver tudo certo, responde
 
 Se algo não conferir, responde `401`. Não há redirecionamentos: a resposta precisa vir do próprio domínio verificado, em HTTPS.
 
-Ritmo das checagens do Escambo:
+O Escambo chama `/status` quando o domínio é verificado e quando o dono toca em "Testar". O sinal de vida contínuo é o batimento do seu servidor (abaixo).
 
-| Situação | Intervalo |
-|---|---|
-| Aguardando, até 15 min depois da verificação | 1 min |
-| Aguardando, até 2 h | 5 min |
-| Aguardando, até 24 h | 30 min |
-| Aguardando, depois de 24 h | 6 h |
-| Conectado, no primeiro dia | 1 h |
-| Conectado, depois do primeiro dia | 24 h |
-| Instável (falhou depois de conectar) | 5 min → 15 min → 1 h |
-
-Depois de 4 falhas seguidas, o estado vira `desconectado`.
+Vários SaaS podem morar no mesmo domínio. Cada um tem o seu App ID, e o SDK escolhe o segredo pelo cabeçalho `X-Escambo-App`. Um App ID desconhecido recebe `401`.
 
 ## Seu SaaS → Escambo
 
@@ -49,7 +39,7 @@ X-Escambo-Assinatura: HMAC(segredo, "escambo-ping.v1.{app_id}.{ts}.{nonce}.{sha2
 Resposta:
 
 ```json
-{"ok": true, "estado": "conectado", "proximo_ping_s": 3600, "servidor_ts": 1767312000}
+{"ok": true, "estado": "conectado", "proximo_ping_s": 60, "servidor_ts": 1767312000}
 ```
 
 Use `proximo_ping_s` para marcar o próximo ping.
@@ -66,7 +56,7 @@ POST /v1/escambo/sdk/resgate/confirmar   (acao = resgate-confirmar)   {"token":"
 → {"ok":true,"assinatura":{"id","expira","teste"}}
 ```
 
-O token é de uso único: depois de confirmado, `consultar` e `confirmar` respondem `409`.
+O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=esc_rg_…`. O token é de uso único e só vale para o App ID que o emitiu: depois de confirmado, `consultar` e `confirmar` respondem `409`.
 
 ## Situação (Escambo → SaaS)
 

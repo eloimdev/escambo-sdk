@@ -85,6 +85,25 @@ No `responder`, a sua função `resgatar` recebe o `Request` em `req`.
 
 **Serverless (Vercel, Netlify, Workers):** o processo não fica vivo, então não use `iniciar()`. Chame `await escambo.ping()` num cron de 1 em 1 minuto. Sem batimento, o Escambo mostra o SaaS como instável em 3 min e desconectado em 10 min.
 
+### Vários SaaS no mesmo site
+
+Cada SaaS cadastrado no Escambo tem o seu App ID e o seu token, mesmo que vários morem no mesmo domínio (ex.: `app.com/editor` e `app.com/agenda`). Um único SDK atende todos: passe uma lista em `apps`. No começo ela tem um item só; cada SaaS novo entra com mais um.
+
+```js
+const escambo = criarEscambo({
+  apps: [
+    {appId: process.env.ESCAMBO_APP_EDITOR, segredo: process.env.ESCAMBO_SEGREDO_EDITOR, resgatar: liberarEditor},
+    {appId: process.env.ESCAMBO_APP_AGENDA, segredo: process.env.ESCAMBO_SEGREDO_AGENDA, resgatar: liberarAgenda},
+  ],
+  situacao: async ({appId, usuario}) => (await planoAtivo(appId, usuario)) ? 'ativa' : 'cancelada', // vale para os dois
+});
+```
+
+- Cada pedido do Escambo leva o App ID no cabeçalho, e o link de resgate leva `?app=`. Assim o SDK sabe qual SaaS libera o plano.
+- Um token de um SaaS não serve no outro.
+- Sem lista, dá para usar só variáveis de ambiente: `ESCAMBO_APP_ID=esc_app_a,esc_app_b` e `ESCAMBO_SEGREDO=esc_sk_a,esc_sk_b`, na mesma ordem.
+- No DNS, cada SaaS tem o seu registro TXT em `_escambo.seu-dominio`. Mantenha todos: um nome pode ter vários TXT.
+
 ### 5. Teste
 
 ```bash
@@ -110,12 +129,12 @@ No app, na etapa **Conecte o SDK**, toque em **Testar resgate**. O Escambo gera 
 
 | | |
 |---|---|
-| `criarEscambo({appId, segredo, caminho, base, resgatar, situacao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. |
+| `criarEscambo({apps, appId, segredo, caminho, base, resgatar, situacao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. Vários SaaS no mesmo site: `apps: [{appId, segredo, resgatar?, situacao?}]`. |
 | `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar` e `/situacao` e chama `next()` no resto. |
 | `escambo.responder(request)` | Mesma coisa para `Request`. Devolve `Response` ou `null`. |
-| `escambo.ping()` | Manda um ping assinado. Devolve `{ok, estado, proximo_ping_s}`. |
+| `escambo.ping()` | Manda um ping assinado por App ID. Com um só, devolve `{ok, estado, proximo_ping_s}`; com vários, `{ok, apps: [...]}`. |
 | `escambo.iniciar()` / `parar()` | Liga ou desliga os pings automáticos. |
-| `escambo.status()` | Estado local: `conectado`, `ultimoPing`, `proximoPing` e `ultimoErro`. |
+| `escambo.status()` | Estado local: `conectado`, `ultimoPing`, `proximoPing`, `ultimoErro` e `apps` (um item por App ID). |
 
 Se usar outro caminho, por exemplo `/api/escambo`, informe o mesmo no painel em **Caminho do SDK**.
 

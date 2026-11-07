@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.2.0';
+export const VERSAO = '0.3.0';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
@@ -25,40 +25,58 @@ export const PROTOCOLO = {
 };
 
 /**
- * Cria o cliente do Escambo.
+ * Cria o cliente do Escambo. Um mesmo site pode ter vários SaaS no Escambo (cada um com o seu App ID):
+ * passe `apps: [{appId, segredo, resgatar?, situacao?}]`. Com um só, basta `appId` + `segredo` (ou as variáveis de ambiente).
  * @param {object} [opcoes]
- * @param {string} [opcoes.appId]   ESCAMBO_APP_ID
+ * @param {Array<{appId: string, segredo?: string, token?: string, resgatar?: Function, situacao?: Function, depoisDoResgate?: string}>} [opcoes.apps]
+ * @param {string} [opcoes.appId]   ESCAMBO_APP_ID (vários? separe por vírgula, na mesma ordem de ESCAMBO_SEGREDO)
  * @param {string} [opcoes.segredo] ESCAMBO_SEGREDO (o "token" do painel)
  * @param {string} [opcoes.caminho] onde o SDK responde no seu site; padrão "/escambo"
  * @param {string} [opcoes.base]    API do Escambo
- * @param {(ctx: object) => Promise<object>} [opcoes.resgatar]  libera o plano para quem abriu o link de resgate
+ * @param {(ctx: object) => Promise<object>} [opcoes.resgatar]  libera o plano para quem abriu o link de resgate (ctx.appId diz qual SaaS)
  * @param {(ctx: object) => Promise<string>} [opcoes.situacao]  diz se a assinatura continua ativa ('ativa' | 'cancelada')
  * @param {string} [opcoes.depoisDoResgate] para onde mandar a pessoa depois de liberar; padrão "/"
  * @param {(evento: string, dados?: object) => void} [opcoes.log]
  */
 export function criarEscambo(opcoes = {}) {
   const env = typeof process !== 'undefined' ? process.env : {};
-  const appId = opcoes.appId || env.ESCAMBO_APP_ID;
-  const segredo = opcoes.segredo || opcoes.token || env.ESCAMBO_SEGREDO;
   const caminho = (opcoes.caminho || env.ESCAMBO_CAMINHO || '/escambo').replace(/\/+$/, '');
   const base = (opcoes.base || env.ESCAMBO_BASE || BASE_PADRAO).replace(/\/+$/, '');
   const log = opcoes.log || (() => {});
-  const depois = opcoes.depoisDoResgate || '/';
-  if (!/^esc_app_[0-9a-f]{20}$/.test(String(appId || ''))) throw new Error('Escambo: ESCAMBO_APP_ID ausente ou inválido.');
-  if (!/^esc_sk_[A-Za-z0-9_-]{40,}$/.test(String(segredo || ''))) throw new Error('Escambo: ESCAMBO_SEGREDO ausente ou inválido.');
   if (!/^\/[A-Za-z0-9/_-]*$/.test(caminho)) throw new Error('Escambo: caminho inválido.');
-  const recursos = ['ping', ...(opcoes.resgatar ? ['resgate'] : []), ...(opcoes.situacao ? ['situacao'] : [])];
 
-  const estado = {conectado: false, ultimoPing: null, ultimoErro: null, proximoPing: null, inicio: null, timer: null, serverEstado: null};
+  // Lista de SaaS atendidos por este servidor. Começa com um; cada SaaS do mesmo domínio entra com o seu App ID.
+  let lista = opcoes.apps;
+  if (!lista) {
+    const ids = String(opcoes.appId || env.ESCAMBO_APP_ID || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const sks = String(opcoes.segredo || opcoes.token || env.ESCAMBO_SEGREDO || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (ids.length !== sks.length) throw new Error('Escambo: ESCAMBO_APP_ID e ESCAMBO_SEGREDO precisam ter a mesma quantidade de itens.');
+    lista = ids.map((appId, i) => ({appId, segredo: sks[i]}));
+  }
+  if (!Array.isArray(lista) || !lista.length) throw new Error('Escambo: ESCAMBO_APP_ID ausente ou inválido.');
+  const apps = new Map();
+  for (const a of lista) {
+    const appId = a?.appId, segredo = a?.segredo || a?.token;
+    if (!/^esc_app_[0-9a-f]{20}$/.test(String(appId || ''))) throw new Error('Escambo: App ID inválido (' + String(appId || 'vazio') + ').');
+    if (!/^esc_sk_[A-Za-z0-9_-]{40,}$/.test(String(segredo || ''))) throw new Error('Escambo: segredo ausente ou inválido para ' + appId + '.');
+    if (apps.has(appId)) throw new Error('Escambo: App ID repetido (' + appId + ').');
+    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao;
+    apps.set(appId, {appId, segredo, resgatar, situacao, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
+      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : [])],
+      estado: {conectado: false, ultimoPing: null, ultimoErro: null, serverEstado: null}});
+  }
+  const unico = apps.size === 1 ? [...apps.values()][0] : null;
+  const recursos = [...new Set([...apps.values()].flatMap((a) => a.recursos))];
+  const estado = {proximoPing: null, inicio: null, timer: null};
 
   // ---------- chamada assinada do seu servidor para o Escambo ----------
-  async function chamar(acao, rota, dados) {
+  async function chamar(app, acao, rota, dados) {
     const corpo = JSON.stringify(dados);
     const ts = Math.floor(Date.now() / 1000), nonce = randomBytes(18).toString('base64url');
-    const assinatura = hmac(segredo, PROTOCOLO.chamada(acao, appId, ts, nonce, sha256(corpo)));
+    const assinatura = hmac(app.segredo, PROTOCOLO.chamada(acao, app.appId, ts, nonce, sha256(corpo)));
     const r = await fetch(base + rota, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-Escambo-App': appId, 'X-Escambo-Ts': String(ts), 'X-Escambo-Nonce': nonce, 'X-Escambo-Assinatura': assinatura},
+      headers: {'Content-Type': 'application/json', 'X-Escambo-App': app.appId, 'X-Escambo-Ts': String(ts), 'X-Escambo-Nonce': nonce, 'X-Escambo-Assinatura': assinatura},
       body: corpo, signal: AbortSignal.timeout(10_000),
     });
     const j = await r.json().catch(() => ({}));
@@ -70,45 +88,50 @@ export function criarEscambo(opcoes = {}) {
   // GET {caminho}/status — o Escambo confere se o SDK está no ar (assinado nos dois sentidos).
   function rotaStatus(url, h) {
     const desafio = url.searchParams.get('desafio') || '', ts = Number(url.searchParams.get('ts'));
-    if (h['x-escambo-app'] !== appId || !/^[0-9a-f]{32}$/.test(desafio) || !Number.isInteger(ts) || !/^[0-9a-f]{64}$/.test(String(h['x-escambo-assinatura'] || '')))
-      return json(401, {sdk: SDK, montado: true, recursos, erro: 'pedido_sem_assinatura'});
+    const app = apps.get(h['x-escambo-app']);
+    if (!app || !/^[0-9a-f]{32}$/.test(desafio) || !Number.isInteger(ts) || !/^[0-9a-f]{64}$/.test(String(h['x-escambo-assinatura'] || '')))
+      return json(401, {sdk: SDK, montado: true, recursos, erro: app || !h['x-escambo-app'] ? 'pedido_sem_assinatura' : 'app_desconhecido'});
     if (Math.abs(Date.now() / 1000 - ts) > 300) return json(401, {sdk: SDK, montado: true, erro: 'relogio'});
-    if (!iguais(h['x-escambo-assinatura'], hmac(segredo, PROTOCOLO.pedido(appId, desafio, ts)))) return json(401, {sdk: SDK, montado: true, erro: 'assinatura'});
-    estado.conectado = true;
-    return json(200, {app_id: appId, sdk: SDK, recursos, ts, prova: hmac(segredo, PROTOCOLO.status(appId, desafio, ts))});
+    if (!iguais(h['x-escambo-assinatura'], hmac(app.segredo, PROTOCOLO.pedido(app.appId, desafio, ts)))) return json(401, {sdk: SDK, montado: true, erro: 'assinatura'});
+    app.estado.conectado = true;
+    return json(200, {app_id: app.appId, sdk: SDK, recursos: app.recursos, ts, prova: hmac(app.segredo, PROTOCOLO.status(app.appId, desafio, ts))});
   }
   // GET {caminho}/situacao — o Escambo pergunta se a assinatura continua ativa para aquela conta.
   async function rotaSituacao(url, h) {
     const desafio = url.searchParams.get('desafio') || '', ts = Number(url.searchParams.get('ts'));
     const assinatura = url.searchParams.get('assinatura') || '', usuario = url.searchParams.get('usuario') || '';
-    if (h['x-escambo-app'] !== appId || !/^[0-9a-f]{32}$/.test(desafio) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 ||
-      !iguais(h['x-escambo-assinatura'], hmac(segredo, PROTOCOLO.situacao(appId, assinatura, usuario, desafio, ts))))
+    const app = apps.get(h['x-escambo-app']);
+    if (!app || !/^[0-9a-f]{32}$/.test(desafio) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 ||
+      !iguais(h['x-escambo-assinatura'], hmac(app.segredo, PROTOCOLO.situacao(app.appId, assinatura, usuario, desafio, ts))))
       return json(401, {erro: 'assinatura'});
-    if (!opcoes.situacao) return json(501, {erro: 'situacao_nao_configurada'});
+    if (!app.situacao) return json(501, {erro: 'situacao_nao_configurada'});
     let sit = 'desconhecida';
-    try { sit = await opcoes.situacao({assinatura, usuario}); } catch (e) { log('situacao_erro', {erro: e?.message}); }
+    try { sit = await app.situacao({appId: app.appId, assinatura, usuario}); } catch (e) { log('situacao_erro', {app: app.appId, erro: e?.message}); }
     if (!['ativa', 'cancelada', 'desconhecida'].includes(sit)) sit = 'desconhecida';
-    return json(200, {situacao: sit, prova: hmac(segredo, PROTOCOLO.situacaoResp(appId, assinatura, sit, desafio, ts))});
+    return json(200, {situacao: sit, prova: hmac(app.segredo, PROTOCOLO.situacaoResp(app.appId, assinatura, sit, desafio, ts))});
   }
-  // GET {caminho}/resgatar?token=… — a pessoa abre o link que recebeu no Escambo, logada no seu SaaS.
+  // GET {caminho}/resgatar?app=…&token=… — a pessoa abre o link que recebeu no Escambo, logada no seu SaaS.
   // 1) confere o token no Escambo  2) chama a sua função resgatar()  3) confirma no Escambo (o token morre aí).
+  // "app" diz qual dos SaaS deste domínio vai liberar o plano.
   async function rotaResgatar(url, req) {
-    if (!opcoes.resgatar) return pagina(501, 'Resgate ainda não configurado', 'Este SaaS ainda não configurou o resgate do Escambo.');
+    const app = apps.get(url.searchParams.get('app') || '') || (url.searchParams.get('app') ? null : unico);
+    if (!app) return pagina(400, 'Link inválido', 'Este link de resgate não é de nenhum SaaS deste site. Abra de novo pelo app do Escambo.');
+    if (!app.resgatar) return pagina(501, 'Resgate ainda não configurado', 'Este SaaS ainda não configurou o resgate do Escambo.');
     const token = url.searchParams.get('token') || '';
     if (!/^esc_rg_[A-Za-z0-9_-]{30,40}$/.test(token)) return pagina(400, 'Link inválido', 'Este link de resgate está incompleto. Abra de novo pelo app do Escambo.');
     let info;
-    try { info = await chamar('resgate-consultar', '/sdk/resgate/consultar', {token}); }
+    try { info = await chamar(app, 'resgate-consultar', '/sdk/resgate/consultar', {token}); }
     catch (e) { return pagina(e.status === 409 ? 409 : 400, e.status === 409 ? 'Link já usado' : 'Não deu para resgatar', e.message); }
     let r;
-    try { r = await opcoes.resgatar({...info.assinatura, token, req}); }
+    try { r = await app.resgatar({...info.assinatura, appId: app.appId, token, req}); }
     catch (e) { log('resgatar_erro', {erro: e?.message}); return pagina(500, 'Não deu para liberar o plano', e?.message || 'Tente de novo.'); }
     if (r?.redirecionar) return {status: 302, headers: {Location: r.redirecionar, 'Cache-Control': 'no-store'}, corpo: ''};
     if (!r?.usuario) return pagina(500, 'Não deu para liberar o plano', 'A função resgatar() precisa devolver { usuario } ou { redirecionar }.');
-    try { await chamar('resgate-confirmar', '/sdk/resgate/confirmar', {token, usuario: String(r.usuario)}); }
+    try { await chamar(app, 'resgate-confirmar', '/sdk/resgate/confirmar', {token, usuario: String(r.usuario)}); }
     catch (e) { return pagina(400, 'Não deu para confirmar', e.message); }
-    log('resgatado', {assinatura: info.assinatura.id, teste: info.assinatura.teste});
+    log('resgatado', {app: app.appId, assinatura: info.assinatura.id, teste: info.assinatura.teste});
     if (info.assinatura.teste) return pagina(200, 'Resgate de teste funcionou', 'A integração está certa. Pode voltar para o Escambo.');
-    return {status: 302, headers: {Location: r.destino || depois, 'Cache-Control': 'no-store'}, corpo: ''};
+    return {status: 302, headers: {Location: r.destino || app.depois, 'Cache-Control': 'no-store'}, corpo: ''};
   }
   const json = (status, o) => ({status, headers: {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'}, corpo: JSON.stringify(o)});
   const pagina = (status, titulo, texto) => ({status, headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'},
@@ -144,18 +167,24 @@ export function criarEscambo(opcoes = {}) {
     return r ? new Response(r.corpo || null, {status: r.status, headers: r.headers}) : null;
   }
 
-  // ---------- batimento: avisa o Escambo que o SaaS está no ar ----------
-  async function ping() {
+  // ---------- batimento: avisa o Escambo que o SaaS está no ar (um por App ID) ----------
+  async function pingApp(app) {
     try {
-      const j = await chamar('ping', '/sdk/ping', {sdk: SDK, recursos, node: typeof process !== 'undefined' ? process.version : undefined});
-      estado.conectado = true; estado.ultimoPing = Date.now(); estado.ultimoErro = null; estado.serverEstado = j.estado;
-      log('ping', {estado: j.estado, proximo_ping_s: j.proximo_ping_s});
-      return {ok: true, ...j};
+      const j = await chamar(app, 'ping', '/sdk/ping', {sdk: SDK, recursos: app.recursos, node: typeof process !== 'undefined' ? process.version : undefined});
+      Object.assign(app.estado, {conectado: true, ultimoPing: Date.now(), ultimoErro: null, serverEstado: j.estado});
+      log('ping', {app: app.appId, estado: j.estado, proximo_ping_s: j.proximo_ping_s});
+      return {appId: app.appId, ok: true, ...j};
     } catch (e) {
-      estado.ultimoErro = e.message || String(e);
-      log('ping_falhou', {status: e.status, erro: estado.ultimoErro});
-      return {ok: false, status: e.status, erro: estado.ultimoErro};
+      app.estado.ultimoErro = e.message || String(e);
+      log('ping_falhou', {app: app.appId, status: e.status, erro: app.estado.ultimoErro});
+      return {appId: app.appId, ok: false, status: e.status, erro: app.estado.ultimoErro};
     }
+  }
+  /** Manda um batimento de cada App ID. Com um só, devolve o resultado dele; com vários, {ok, apps:[…]}. */
+  async function ping() {
+    const r = await Promise.all([...apps.values()].map(pingApp));
+    if (unico) return r[0];
+    return {ok: r.every((x) => x.ok), proximo_ping_s: Math.min(...r.map((x) => Number(x.proximo_ping_s) || 60)), apps: r};
   }
   // Ritmo: o Escambo pede um batimento por minuto. Se o seu servidor parar, em 3 min ele aparece como instável
   // e em 10 min como desconectado. Falhou? tenta de novo em 1 min.
@@ -172,9 +201,11 @@ export function criarEscambo(opcoes = {}) {
   /** Começa o batimento em segundo plano (servidor sempre ligado). Em serverless, chame ping() num cron de 1 min. */
   function iniciar() { if (estado.inicio) return; estado.inicio = Date.now(); agendar(0); }
   function parar() { clearTimeout(estado.timer); estado.timer = null; estado.inicio = null; }
-  const status = () => ({appId, caminho, base, recursos, conectado: estado.conectado, estado: estado.serverEstado, ultimoPing: estado.ultimoPing, proximoPing: estado.proximoPing, ultimoErro: estado.ultimoErro});
+  const umStatus = (a) => ({appId: a.appId, recursos: a.recursos, conectado: a.estado.conectado, estado: a.estado.serverEstado, ultimoPing: a.estado.ultimoPing, ultimoErro: a.estado.ultimoErro});
+  const status = () => ({...(unico ? umStatus(unico) : {}), caminho, base, recursos, proximoPing: estado.proximoPing, apps: [...apps.values()].map(umStatus)});
+  const appIds = [...apps.keys()];
 
-  return {middleware, responder, ping, iniciar, parar, status, caminho, appId, recursos};
+  return {middleware, responder, ping, iniciar, parar, status, caminho, appId: appIds[0], appIds, recursos};
 }
 
 export default criarEscambo;
