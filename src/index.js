@@ -2,13 +2,14 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.5.1';
+export const VERSAO = '0.6.0';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
 const MIN = 60_000;
+const LIMITE_CORPO = 16384; // bytes aceitos no corpo de /fim e /revogar
 const hmac = (segredo, msg) => createHmac('sha256', segredo).update(msg).digest('hex');
-const sha256 = (v) => createHash('sha256').update(v).digest('hex');
+const sha256 = (v) => createHash('sha256').update(v).digest('hex'); // string (UTF-8) ou Buffer: mesmo hash para os mesmos bytes
 const iguais = (a, b) => {
   const A = Buffer.from(String(a || '')), B = Buffer.from(String(b || ''));
   return A.length === B.length && timingSafeEqual(A, B);
@@ -26,7 +27,10 @@ export const PROTOCOLO = {
   conversaoResp: (app, assinatura, resultado, desafio, ts) => `escambo-conversao-resp.v1.${app}.${assinatura}.${resultado}.${desafio}.${ts}`,
   fim: (app, ts, nonce, corpoHash) => `escambo-fim.v1.${app}.${ts}.${nonce}.${corpoHash}`,
   fimResp: (app, nonce) => `escambo-fim-resp.v1.${app}.${nonce}`,
+  revogar: (app, ts, nonce, corpoHash) => `escambo-revogar.v1.${app}.${ts}.${nonce}.${corpoHash}`,
+  revogarResp: (app, nonce) => `escambo-revogar-resp.v1.${app}.${nonce}`,
 };
+export const MOTIVOS_REVOGAR = ['denuncia', 'resgate_falhou', 'reembolso'];
 
 /**
  * Cria o cliente do Escambo. Um mesmo site pode ter vários SaaS no Escambo (cada um com o seu App ID):
@@ -40,7 +44,12 @@ export const PROTOCOLO = {
  * @param {(ctx: object) => Promise<object>} [opcoes.resgatar]  libera o plano para quem abriu o link de resgate (ctx.appId diz qual SaaS)
  * @param {(ctx: object) => Promise<string>} [opcoes.situacao]  diz se a assinatura continua ativa ('ativa' | 'cancelada')
  * @param {(ctx: object) => Promise<boolean|string>} [opcoes.conversao]  (0.4) depois que a troca acaba: essa conta virou cliente pagante? true/false
- * @param {(ctx: object) => Promise<void>} [opcoes.fimDaTroca]  (0.5) a troca desta conta está acabando (momento 'perto', 7 dias antes) ou acabou ('fim'); traz a oferta de saída do dono, se ele quiser mostrar no seu app
+ * @param {(ctx: object) => Promise<void>} [opcoes.fimDaTroca]  (0.5) a troca desta conta está acabando (momento 'perto', 7 dias antes) ou acabou no prazo ('fim'); traz a oferta de saída do dono, se ele quiser mostrar no seu app.
+ *   Encerramento antecipado (denúncia, resgate que falhou, reembolso) NÃO vem por aqui: vem por revogar().
+ * @param {(ctx: object) => Promise<void>} [opcoes.revogar]  (0.6) a troca foi encerrada antes do prazo (o comprador denunciou ou disse que o resgate falhou):
+ *   tire o plano daquela conta. Recebe {appId, assinatura, usuario, plano, plano_id, motivo}. Seja idempotente; se lançar erro o Escambo tenta de novo.
+ * @param {{tem: (chave: string) => Promise<boolean>|boolean, guardar: (chave: string, ttlMs: number) => Promise<void>|void}} [opcoes.nonces]
+ *   (0.6) onde guardar os nonces já usados em /fim e /revogar. Padrão: memória do processo (some ao reiniciar). Em serverless ou com vários processos, use Redis/KV/banco.
  * @param {string} [opcoes.depoisDoResgate] para onde mandar a pessoa depois de liberar; padrão "/"
  * @param {(evento: string, dados?: object) => void} [opcoes.log]
  */
@@ -66,14 +75,24 @@ export function criarEscambo(opcoes = {}) {
     if (!/^esc_app_[0-9a-f]{20}$/.test(String(appId || ''))) throw new Error('Escambo: App ID inválido (' + String(appId || 'vazio') + ').');
     if (!/^esc_sk_[A-Za-z0-9_-]{40,}$/.test(String(segredo || ''))) throw new Error('Escambo: segredo ausente ou inválido para ' + appId + '.');
     if (apps.has(appId)) throw new Error('Escambo: App ID repetido (' + appId + ').');
-    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao, conversao = a.conversao || opcoes.conversao, fimDaTroca = a.fimDaTroca || opcoes.fimDaTroca;
-    apps.set(appId, {appId, segredo, resgatar, situacao, conversao, fimDaTroca, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
-      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : []), ...(conversao ? ['conversao'] : []), ...(fimDaTroca ? ['fim'] : [])],
+    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao, conversao = a.conversao || opcoes.conversao, fimDaTroca = a.fimDaTroca || opcoes.fimDaTroca, revogar = a.revogar || opcoes.revogar;
+    apps.set(appId, {appId, segredo, resgatar, situacao, conversao, fimDaTroca, revogar, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
+      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : []), ...(conversao ? ['conversao'] : []), ...(fimDaTroca ? ['fim'] : []), ...(revogar ? ['revogar'] : [])],
       estado: {conectado: false, ultimoPing: null, ultimoErro: null, serverEstado: null}});
   }
   const unico = apps.size === 1 ? [...apps.values()][0] : null;
   const recursos = [...new Set([...apps.values()].flatMap((a) => a.recursos))];
   const estado = {proximoPing: null, inicio: null, timer: null, falhandoDesde: null};
+  // Nonces já usados em /fim e /revogar. Padrão em memória; passe opcoes.nonces para persistir (serverless, reinício, vários processos).
+  const memoria = new Map();
+  const nonces = opcoes.nonces || {
+    tem: (k) => (memoria.get(k) || 0) > Date.now(),
+    guardar: (k, ttl) => {
+      memoria.set(k, Date.now() + ttl);
+      if (memoria.size > 5000) for (const [c, v] of memoria) if (v <= Date.now()) memoria.delete(c);
+    },
+  };
+  if (typeof nonces.tem !== 'function' || typeof nonces.guardar !== 'function') throw new Error('Escambo: nonces precisa de tem(chave) e guardar(chave, ttlMs).');
 
   // ---------- chamada assinada do seu servidor para o Escambo ----------
   async function chamar(app, acao, rota, dados) {
@@ -171,35 +190,91 @@ export function criarEscambo(opcoes = {}) {
     for (const k of ['x-escambo-app', 'x-escambo-assinatura']) out[k] = typeof h?.get === 'function' ? h.get(k) || undefined : (Array.isArray(h?.[k]) ? h[k][0] : h?.[k]);
     return out;
   };
-  // POST {caminho}/fim (0.5) — o Escambo avisa que a troca de uma conta está acabando ou acabou. Corpo assinado (HMAC do hash),
-  // nonce único e relógio de ±5 min. A sua função recebe {appId, assinatura, usuario, plano, plano_id, meses, expira, momento, oferta}.
-  const noncesFim = new Map();
-  async function rotaFim(h, corpo) {
-    const app = apps.get(h['x-escambo-app']), ts = Number(h['x-escambo-ts']), nonce = String(h['x-escambo-nonce'] || '');
-    if (!app || !/^[0-9a-f]{16,64}$/.test(nonce) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 ||
-      !iguais(h['x-escambo-assinatura'], hmac(app.segredo, PROTOCOLO.fim(app.appId, ts, nonce, sha256(corpo)))))
-      return json(401, {erro: 'assinatura'});
-    if (noncesFim.has(app.appId + nonce)) return json(409, {erro: 'repetido'});
-    noncesFim.set(app.appId + nonce, Date.now());
-    if (noncesFim.size > 5000) for (const [k, v] of noncesFim) if (Date.now() - v > 10 * MIN) noncesFim.delete(k);
+  // ---------- POST assinados (Escambo → SaaS): /fim (0.5) e /revogar (0.6) ----------
+  // Autentica o que dá antes de ler o corpo (app, relógio de ±5 min, formato do nonce e nonce inédito), lê no máximo 16 KB
+  // em bytes, confere o HMAC do sha256 desses bytes e só então gasta o nonce.
+  const resp413 = () => { const r = json(413, {erro: 'corpo_grande'}); r.headers.Connection = 'close'; return r; };
+  async function lerCorpo(req, cl) {
+    if (Number(cl) > LIMITE_CORPO) return {resp: resp413()};
+    const pronto = (b) => b.length > LIMITE_CORPO ? {resp: resp413()} : {buf: b};
+    if (req?.rawBody != null) return pronto(Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(String(req.rawBody), 'utf8'));
+    if (typeof req?.text === 'function') { // Request (fetch): lê em pedaços até o limite
+      if (req.bodyUsed) return {resp: json(400, {erro: 'corpo_consumido'})};
+      const leitor = req.body?.getReader?.(), partes = [];
+      let n = 0;
+      if (leitor) for (;;) {
+        const {done, value} = await leitor.read();
+        if (done) break;
+        n += value.length;
+        if (n > LIMITE_CORPO) { leitor.cancel().catch(() => {}); return {resp: resp413()}; }
+        partes.push(Buffer.from(value));
+      }
+      return {buf: Buffer.concat(partes, n)};
+    }
+    if (Buffer.isBuffer(req?.body) || typeof req?.body === 'string') return pronto(Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body, 'utf8')); // express.raw / express.text
+    if ((req?.body && typeof req.body === 'object') || req?.readableEnded)
+      return {resp: json(400, {erro: 'corpo_consumido', dica: 'monte o middleware do Escambo antes do express.json()'})};
+    return new Promise((ok) => { // Node http: junta Buffers e decodifica uma vez só
+      const partes = [];
+      let n = 0;
+      const sair = (v) => { req.off('data', dado); req.off('end', fim); req.off('error', erro); ok(v); };
+      const dado = (c) => {
+        c = Buffer.isBuffer(c) ? c : Buffer.from(c);
+        n += c.length;
+        if (n > LIMITE_CORPO) { req.pause?.(); sair({resp: resp413()}); } else partes.push(c);
+      };
+      const fim = () => sair({buf: Buffer.concat(partes, n)});
+      const erro = () => sair({resp: json(400, {erro: 'corpo'})});
+      req.on('data', dado); req.on('end', fim); req.on('error', erro);
+    });
+  }
+  async function postAssinado(tipo, h, req) {
+    const app = apps.get(h['x-escambo-app']), ts = Number(h['x-escambo-ts']), nonce = String(h['x-escambo-nonce'] || ''), sig = String(h['x-escambo-assinatura'] || '');
+    if (!app || !/^[0-9a-f]{16,64}$/.test(nonce) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 || !/^[0-9a-f]{64}$/.test(sig))
+      return {resp: json(401, {erro: 'assinatura'})};
+    const chave = 'escambo:' + app.appId + ':' + nonce;
+    if (await nonces.tem(chave)) return {resp: json(409, {erro: 'repetido'})};
+    const c = await lerCorpo(req, h['content-length']);
+    if (c.resp) return c;
+    if (!iguais(sig, hmac(app.segredo, PROTOCOLO[tipo](app.appId, ts, nonce, sha256(c.buf))))) return {resp: json(401, {erro: 'assinatura'})};
+    if (await nonces.tem(chave)) return {resp: json(409, {erro: 'repetido'})};
+    await nonces.guardar(chave, 10 * MIN);
+    let info;
+    try { info = JSON.parse(c.buf.toString('utf8') || '{}'); } catch { return {resp: json(400, {erro: 'json'})}; }
+    return {app, nonce, info: info && typeof info === 'object' ? info : {}};
+  }
+  // POST {caminho}/fim (0.5) — a troca de uma conta está acabando (momento 'perto') ou acabou no prazo ('fim').
+  // A sua função recebe {appId, assinatura, usuario, plano, plano_id, meses, expira, momento, oferta}. Encerramento antecipado vem por /revogar.
+  async function rotaFim(h, req) {
+    const r = await postAssinado('fim', h, req);
+    if (r.resp) return r.resp;
+    const {app, info} = r;
     if (!app.fimDaTroca) return json(501, {erro: 'fim_nao_configurado'});
-    let info = {};try { info = JSON.parse(corpo || '{}'); } catch { return json(400, {erro: 'json'}); }
     try { await app.fimDaTroca({appId: app.appId, assinatura: info.assinatura, usuario: info.usuario, plano: info.plano, plano_id: info.plano_id,
       meses: info.meses, expira: info.expira, momento: info.momento === 'fim' ? 'fim' : 'perto', oferta: info.oferta || null}); }
     catch (e) { log('fim_erro', {app: app.appId, erro: e?.message}); }
-    return json(200, {ok: true, prova: hmac(app.segredo, PROTOCOLO.fimResp(app.appId, nonce))});
+    return json(200, {ok: true, prova: hmac(app.segredo, PROTOCOLO.fimResp(app.appId, r.nonce))});
   }
-  const lerCorpo = async (req) => {
-    if (typeof req?.text === 'function') return (await req.text()).slice(0, 16384);
-    let s = '';
-    for await (const c of req) { s += c; if (s.length > 16384) break; }
-    return s;
-  };
+  // POST {caminho}/revogar (0.6) — a troca foi encerrada antes do prazo (denúncia do comprador, resgate que falhou ou reembolso).
+  // Vale para os dois lados: o dono deixa de receber e o comprador perde o plano. A sua função tira o plano da conta.
+  // Erro na sua função = 500 e o Escambo tenta de novo (com ts e nonce novos): seja idempotente.
+  async function rotaRevogar(h, req) {
+    const r = await postAssinado('revogar', h, req);
+    if (r.resp) return r.resp;
+    const {app, info} = r;
+    if (!app.revogar) return json(501, {erro: 'revogar_nao_configurado'});
+    if (typeof info.assinatura !== 'string' || !info.assinatura) return json(400, {erro: 'assinatura_ausente'});
+    const motivo = MOTIVOS_REVOGAR.includes(info.motivo) ? info.motivo : 'denuncia';
+    try { await app.revogar({appId: app.appId, assinatura: info.assinatura, usuario: info.usuario == null ? null : String(info.usuario), plano: info.plano ?? null, plano_id: info.plano_id ?? null, motivo}); }
+    catch (e) { log('revogar_erro', {app: app.appId, erro: e?.message}); return json(500, {erro: 'revogar_falhou'}); }
+    log('revogado', {app: app.appId, assinatura: info.assinatura, motivo});
+    return json(200, {ok: true, prova: hmac(app.segredo, PROTOCOLO.revogarResp(app.appId, r.nonce))});
+  }
   async function atender(method, url, headers, req) {
-    if (method === 'POST' && url.pathname === caminho + '/fim') {
+    if (method === 'POST' && (url.pathname === caminho + '/fim' || url.pathname === caminho + '/revogar')) {
       const h = lerHeaders(headers);
-      for (const k of ['x-escambo-ts', 'x-escambo-nonce']) h[k] = typeof headers?.get === 'function' ? headers.get(k) || undefined : (Array.isArray(headers?.[k]) ? headers[k][0] : headers?.[k]);
-      return rotaFim(h, await lerCorpo(req));
+      for (const k of ['x-escambo-ts', 'x-escambo-nonce', 'content-length']) h[k] = typeof headers?.get === 'function' ? headers.get(k) || undefined : (Array.isArray(headers?.[k]) ? headers[k][0] : headers?.[k]);
+      return url.pathname === caminho + '/fim' ? rotaFim(h, req) : rotaRevogar(h, req);
     }
     if (method !== 'GET') return null;
     if (url.pathname === caminho + '/status') return rotaStatus(url, lerHeaders(headers));
@@ -234,7 +309,8 @@ export function criarEscambo(opcoes = {}) {
       // Saiu versão nova do SDK: avisa no log do servidor (uma vez por dia). Mais de 30 dias numa versão velha = dormência.
       if (j.atualizar && Date.now() - (estado.avisouVersao || 0) > 24 * 60 * MIN) {
         estado.avisouVersao = Date.now();
-        const msg = 'Escambo: saiu o SDK ' + j.sdk_ultima + ' (você usa ' + VERSAO + '). Atualize com: npm i github:eloimdev/escambo-sdk';
+        const tag = /^\d+\.\d+\.\d+$/.test(String(j.sdk_ultima || '')) ? '#v' + j.sdk_ultima : '#v<versão>';
+        const msg = 'Escambo: saiu o SDK ' + j.sdk_ultima + ' (você usa ' + VERSAO + '). Atualize fixando a tag: npm i github:eloimdev/escambo-sdk' + tag;
         log('atualizacao', {atual: VERSAO, ultima: j.sdk_ultima});
         if (!opcoes.log) console.warn(msg);
       }

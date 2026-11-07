@@ -1,6 +1,6 @@
 {
   "name": "@rande/escambo",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "SDK do Escambo: conecta o seu SaaS ao marketplace de troca de assinaturas.",
   "type": "module",
   "main": "./src/index.js",

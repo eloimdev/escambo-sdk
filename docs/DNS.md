@@ -38,7 +38,7 @@ Depois de salvar, o Escambo checa sozinho a cada minuto. Você também pode toca
 ## Conferir do seu computador
 
 ```bash
-npx github:eloimdev/escambo-sdk dns seudominio.com
+npx github:eloimdev/escambo-sdk#v0.6.0 dns seudominio.com
 ```
 
 Ou com as ferramentas do sistema:

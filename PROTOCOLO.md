@@ -54,9 +54,10 @@ POST /v1/escambo/sdk/resgate/consultar   (acao = resgate-consultar)   {"token":"
 → {"assinatura":{"id","plano","plano_id","meses","teste","comprador":{"nome"}}}
 
 POST /v1/escambo/sdk/resgate/confirmar   (acao = resgate-confirmar)   {"token":"esc_rg_...","reserva":"esc_rs_...","usuario":"id-da-conta-no-saas"}
+→ {"ok":true,"assinatura":{"id","plano","meses","expira","teste"}}
 
 POST /v1/escambo/sdk/resgate/liberar     (acao = resgate-liberar)     {"token":"esc_rg_...","reserva":"esc_rs_..."}
-→ {"ok":true,"assinatura":{"id","expira","teste"}}
+→ {"ok":true}
 ```
 
 O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=esc_rg_…`. Com `reservar: true`, o `consultar` reserva o link por 3 min e devolve `reserva`. Outra consulta do mesmo link nesse tempo recebe `409 ESCAMBO_TOKEN_EM_USO`, e o `confirmar` precisa da mesma `reserva`. Se a pessoa precisar entrar antes (redirecionamento) ou a liberação falhar, o SDK chama `liberar`. O token é de uso único e só vale para o App ID que o emitiu: depois de confirmado, `consultar` e `confirmar` respondem `409`.
@@ -67,17 +68,49 @@ O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=es
 GET {url}{caminho}/situacao?assinatura=&usuario=&desafio=&ts=
 X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-situacao.v1.{app}.{assinatura}.{usuario}.{desafio}.{ts}")
 → {"situacao":"ativa"|"cancelada"|"desconhecida","prova":HMAC(segredo,"escambo-situacao-resp.v1.{app}.{assinatura}.{situacao}.{desafio}.{ts}")}
+```
+
+## POST assinados (Escambo → SaaS): /fim e /revogar
+
+Regras comuns às duas rotas:
+
+- Cabeçalhos `X-Escambo-App`, `X-Escambo-Ts` (Unix s, ±300 s), `X-Escambo-Nonce` (16–64 caracteres `[0-9a-f]`, novo a cada tentativa) e `X-Escambo-Assinatura` (64 hex).
+- O SaaS confere app, relógio, formato e nonce inédito **antes de ler o corpo**. `Content-Length` acima de 16384 → `413` sem ler; o corpo lido passa de 16384 bytes → `413`.
+- A assinatura cobre o `sha256` hex dos **bytes** do corpo (JSON em UTF-8). Assinatura errada → `401`; nonce já usado → `409`. O nonce só é gasto depois da assinatura conferir e fica guardado 10 min.
+- Corpo já consumido por um body parser (sem bytes crus disponíveis) → `400 {"erro":"corpo_consumido"}`. JSON inválido → `400 {"erro":"json"}`.
 
 ### Fim da troca (0.5)
 
-Só se o SDK anunciar o recurso `fim`. 7 dias antes do fim (`perto`) e no fim natural (`fim`), uma vez cada:
+Só se o SDK anunciar o recurso `fim`. 7 dias antes do fim (`perto`) e no fim natural (`fim`), uma vez cada. Encerramento antes do prazo não usa `/fim`: usa `/revogar`.
 
 ```
 POST {url}{caminho}/fim   corpo JSON {assinatura,usuario,plano,plano_id,meses,expira,momento,oferta}
 X-Escambo-App, X-Escambo-Ts, X-Escambo-Nonce, X-Escambo-Assinatura: HMAC(segredo, "escambo-fim.v1.{app}.{ts}.{nonce}.{sha256(corpo)}")
 → 200 {"ok":true,"prova":HMAC(segredo,"escambo-fim-resp.v1.{app}.{nonce}")}
 ```
-`oferta` só vem quando o dono marcou a oferta de saída para aparecer no app dele (plano Pro ou Escala). Formato (0.5.1): `{nome, desconto, meses, texto, codigo, link}` — `desconto` em % (5–90), `meses` 1–12 ou 0 (enquanto assinar). Sem `fimDaTroca()`: 501.
+`oferta` só vem quando o dono marcou a oferta de saída para aparecer no app dele (plano Pro ou Escala). Formato (0.5.1): `{nome, desconto, meses, texto, codigo, link}` — `desconto` em % (5–90), `meses` 1–12 ou 0 (enquanto assinar). Sem `fimDaTroca()`: 501. Erro dentro de `fimDaTroca()` não muda a resposta (200).
+
+### Revogação (0.6)
+
+Só se o SDK anunciar o recurso `revogar`. Quando o comprador denuncia um problema ou diz que o resgate não funcionou (ou há reembolso), a troca é encerrada para os dois: o dono deixa de receber (a 1ª parcela fica 7 dias em garantia e é cancelada se ainda não saiu) e o Escambo pede ao SaaS que tire o plano da conta.
+
+```
+POST {url}{caminho}/revogar
+Content-Type: application/json
+X-Escambo-App: {app_id}
+X-Escambo-Ts: {ts}
+X-Escambo-Nonce: {16–64 hex}
+X-Escambo-Assinatura: HMAC(segredo, "escambo-revogar.v1.{app}.{ts}.{nonce}.{sha256(corpo)}")
+
+{"assinatura":"id-da-assinatura","usuario":"id-da-conta-no-saas","plano":"Plano M","plano_id":"m","motivo":"denuncia"|"resgate_falhou"|"reembolso"}
+
+→ 200 {"ok":true,"prova":HMAC(segredo,"escambo-revogar-resp.v1.{app}.{nonce}")}
+→ 500 {"erro":"revogar_falhou"}          a função do SaaS falhou: o Escambo tenta de novo (ts e nonce novos)
+→ 501 {"erro":"revogar_nao_configurado"} SDK sem revogar()
+→ 400 {"erro":"assinatura_ausente"}      corpo sem "assinatura"
+```
+
+A função `revogar` recebe `{appId, assinatura, usuario, plano, plano_id, motivo}`; motivo fora da lista chega como `denuncia`. Ela deve ser idempotente. O Escambo só considera a revogação entregue com `200` e a `prova` certa.
 
 ### Conversão depois da troca (0.4)
 
@@ -89,7 +122,6 @@ X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-conversao.v1.{app}.{
 → {"resultado":"pagante"|"nao"|"desconhecida","prova":HMAC(segredo,"escambo-conversao-resp.v1.{app}.{assinatura}.{resultado}.{desafio}.{ts}")}
 ```
 Sem `conversao()` configurada: 501.
-```
 
 ## Batimento
 
