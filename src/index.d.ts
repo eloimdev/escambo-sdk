@@ -5,6 +5,8 @@ type Resgatar = (ctx: {appId: string; id: string; plano: string; plano_id: strin
     Promise<{usuario: string; destino?: string} | {redirecionar: string}>;
 type Situacao = (ctx: {appId: string; assinatura: string; usuario: string}) => Promise<'ativa' | 'cancelada' | 'desconhecida'>;
 /** 0.4: depois que a troca acaba, essa conta virou cliente pagante? (true/false; só sim/não sai do seu servidor) */
+/** 0.5: a troca desta conta está acabando ('perto', 7 dias antes) ou acabou ('fim'); oferta = a oferta de saída do dono, se ele escolheu mostrar no seu app. */
+type FimDaTroca = (ctx: {appId: string; assinatura: string; usuario: string; plano: string; plano_id: string; meses: number; expira: number; momento: 'perto' | 'fim'; oferta: {texto: string; codigo: string | null; link: string | null} | null}) => Promise<void>;
 type Conversao = (ctx: {appId: string; assinatura: string; usuario: string}) => Promise<boolean | 'pagante' | 'nao' | 'desconhecida'>;
 /** Um SaaS no Escambo. Vários SaaS do mesmo domínio = vários itens, cada um com o seu App ID. */
 export interface AppEscambo {
@@ -14,6 +16,7 @@ export interface AppEscambo {
   resgatar?: Resgatar;
   situacao?: Situacao;
   conversao?: Conversao;
+  fimDaTroca?: FimDaTroca;
   depoisDoResgate?: string;
 }
 export interface OpcoesEscambo {
@@ -28,6 +31,7 @@ export interface OpcoesEscambo {
   resgatar?: Resgatar;
   situacao?: Situacao;
   conversao?: Conversao;
+  fimDaTroca?: FimDaTroca;
 }
 export interface RespostaPing {
   ok: boolean;

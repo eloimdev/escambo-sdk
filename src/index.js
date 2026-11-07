@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.4.0';
+export const VERSAO = '0.5.0';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
@@ -24,6 +24,8 @@ export const PROTOCOLO = {
   situacaoResp: (app, assinatura, situacao, desafio, ts) => `escambo-situacao-resp.v1.${app}.${assinatura}.${situacao}.${desafio}.${ts}`,
   conversao: (app, assinatura, usuario, desafio, ts) => `escambo-conversao.v1.${app}.${assinatura}.${usuario}.${desafio}.${ts}`,
   conversaoResp: (app, assinatura, resultado, desafio, ts) => `escambo-conversao-resp.v1.${app}.${assinatura}.${resultado}.${desafio}.${ts}`,
+  fim: (app, ts, nonce, corpoHash) => `escambo-fim.v1.${app}.${ts}.${nonce}.${corpoHash}`,
+  fimResp: (app, nonce) => `escambo-fim-resp.v1.${app}.${nonce}`,
 };
 
 /**
@@ -38,6 +40,7 @@ export const PROTOCOLO = {
  * @param {(ctx: object) => Promise<object>} [opcoes.resgatar]  libera o plano para quem abriu o link de resgate (ctx.appId diz qual SaaS)
  * @param {(ctx: object) => Promise<string>} [opcoes.situacao]  diz se a assinatura continua ativa ('ativa' | 'cancelada')
  * @param {(ctx: object) => Promise<boolean|string>} [opcoes.conversao]  (0.4) depois que a troca acaba: essa conta virou cliente pagante? true/false
+ * @param {(ctx: object) => Promise<void>} [opcoes.fimDaTroca]  (0.5) a troca desta conta está acabando (momento 'perto', 7 dias antes) ou acabou ('fim'); traz a oferta de saída do dono, se ele quiser mostrar no seu app
  * @param {string} [opcoes.depoisDoResgate] para onde mandar a pessoa depois de liberar; padrão "/"
  * @param {(evento: string, dados?: object) => void} [opcoes.log]
  */
@@ -63,9 +66,9 @@ export function criarEscambo(opcoes = {}) {
     if (!/^esc_app_[0-9a-f]{20}$/.test(String(appId || ''))) throw new Error('Escambo: App ID inválido (' + String(appId || 'vazio') + ').');
     if (!/^esc_sk_[A-Za-z0-9_-]{40,}$/.test(String(segredo || ''))) throw new Error('Escambo: segredo ausente ou inválido para ' + appId + '.');
     if (apps.has(appId)) throw new Error('Escambo: App ID repetido (' + appId + ').');
-    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao, conversao = a.conversao || opcoes.conversao;
-    apps.set(appId, {appId, segredo, resgatar, situacao, conversao, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
-      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : []), ...(conversao ? ['conversao'] : [])],
+    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao, conversao = a.conversao || opcoes.conversao, fimDaTroca = a.fimDaTroca || opcoes.fimDaTroca;
+    apps.set(appId, {appId, segredo, resgatar, situacao, conversao, fimDaTroca, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
+      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : []), ...(conversao ? ['conversao'] : []), ...(fimDaTroca ? ['fim'] : [])],
       estado: {conectado: false, ultimoPing: null, ultimoErro: null, serverEstado: null}});
   }
   const unico = apps.size === 1 ? [...apps.values()][0] : null;
@@ -168,7 +171,36 @@ export function criarEscambo(opcoes = {}) {
     for (const k of ['x-escambo-app', 'x-escambo-assinatura']) out[k] = typeof h?.get === 'function' ? h.get(k) || undefined : (Array.isArray(h?.[k]) ? h[k][0] : h?.[k]);
     return out;
   };
+  // POST {caminho}/fim (0.5) — o Escambo avisa que a troca de uma conta está acabando ou acabou. Corpo assinado (HMAC do hash),
+  // nonce único e relógio de ±5 min. A sua função recebe {appId, assinatura, usuario, plano, plano_id, meses, expira, momento, oferta}.
+  const noncesFim = new Map();
+  async function rotaFim(h, corpo) {
+    const app = apps.get(h['x-escambo-app']), ts = Number(h['x-escambo-ts']), nonce = String(h['x-escambo-nonce'] || '');
+    if (!app || !/^[0-9a-f]{16,64}$/.test(nonce) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 ||
+      !iguais(h['x-escambo-assinatura'], hmac(app.segredo, PROTOCOLO.fim(app.appId, ts, nonce, sha256(corpo)))))
+      return json(401, {erro: 'assinatura'});
+    if (noncesFim.has(app.appId + nonce)) return json(409, {erro: 'repetido'});
+    noncesFim.set(app.appId + nonce, Date.now());
+    if (noncesFim.size > 5000) for (const [k, v] of noncesFim) if (Date.now() - v > 10 * MIN) noncesFim.delete(k);
+    if (!app.fimDaTroca) return json(501, {erro: 'fim_nao_configurado'});
+    let info = {};try { info = JSON.parse(corpo || '{}'); } catch { return json(400, {erro: 'json'}); }
+    try { await app.fimDaTroca({appId: app.appId, assinatura: info.assinatura, usuario: info.usuario, plano: info.plano, plano_id: info.plano_id,
+      meses: info.meses, expira: info.expira, momento: info.momento === 'fim' ? 'fim' : 'perto', oferta: info.oferta || null}); }
+    catch (e) { log('fim_erro', {app: app.appId, erro: e?.message}); }
+    return json(200, {ok: true, prova: hmac(app.segredo, PROTOCOLO.fimResp(app.appId, nonce))});
+  }
+  const lerCorpo = async (req) => {
+    if (typeof req?.text === 'function') return (await req.text()).slice(0, 16384);
+    let s = '';
+    for await (const c of req) { s += c; if (s.length > 16384) break; }
+    return s;
+  };
   async function atender(method, url, headers, req) {
+    if (method === 'POST' && url.pathname === caminho + '/fim') {
+      const h = lerHeaders(headers);
+      for (const k of ['x-escambo-ts', 'x-escambo-nonce']) h[k] = typeof headers?.get === 'function' ? headers.get(k) || undefined : (Array.isArray(headers?.[k]) ? headers[k][0] : headers?.[k]);
+      return rotaFim(h, await lerCorpo(req));
+    }
     if (method !== 'GET') return null;
     if (url.pathname === caminho + '/status') return rotaStatus(url, lerHeaders(headers));
     if (url.pathname === caminho + '/situacao') return rotaSituacao(url, lerHeaders(headers));

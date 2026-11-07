@@ -68,6 +68,17 @@ GET {url}{caminho}/situacao?assinatura=&usuario=&desafio=&ts=
 X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-situacao.v1.{app}.{assinatura}.{usuario}.{desafio}.{ts}")
 → {"situacao":"ativa"|"cancelada"|"desconhecida","prova":HMAC(segredo,"escambo-situacao-resp.v1.{app}.{assinatura}.{situacao}.{desafio}.{ts}")}
 
+### Fim da troca (0.5)
+
+Só se o SDK anunciar o recurso `fim`. 7 dias antes do fim (`perto`) e no fim natural (`fim`), uma vez cada:
+
+```
+POST {url}{caminho}/fim   corpo JSON {assinatura,usuario,plano,plano_id,meses,expira,momento,oferta}
+X-Escambo-App, X-Escambo-Ts, X-Escambo-Nonce, X-Escambo-Assinatura: HMAC(segredo, "escambo-fim.v1.{app}.{ts}.{nonce}.{sha256(corpo)}")
+→ 200 {"ok":true,"prova":HMAC(segredo,"escambo-fim-resp.v1.{app}.{nonce}")}
+```
+`oferta` só vem quando o dono marcou a oferta de saída para aparecer no app dele (plano Pro ou Escala). Sem `fimDaTroca()`: 501.
+
 ### Conversão depois da troca (0.4)
 
 De 3 a 60 dias depois do fim da troca (de novo a cada 7 dias sem resposta definitiva), só se o SDK anunciar o recurso `conversao`:

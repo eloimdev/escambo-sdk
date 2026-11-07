@@ -45,6 +45,8 @@ npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 
 O SDK cuida das rotas no seu site (`/escambo/status`, `/escambo/resgatar`, `/escambo/situacao` e, desde a 0.4, `/escambo/conversao`) e do batimento.
 
+**Novo na 0.5 — fim da troca e oferta de saída no seu app.** Passe `fimDaTroca: async ({usuario, momento, expira, plano, oferta}) => {...}`. O Escambo avisa 7 dias antes do fim (`momento: "perto"`) e quando acaba (`"fim"`), assinado. Se você cadastrou uma oferta de saída marcada para o SDK, ela vem em `oferta` (`{texto, codigo, link}`): mostre no seu app para a pessoa renovar com desconto. Rota: `POST {caminho}/fim`.
+
 **Novo na 0.4 — conversão depois da troca.** Passe `conversao: async ({usuario}) => clientePagante(usuario)` (true/false). Uns dias depois que a troca termina, o Escambo pergunta (assinado) se aquela conta virou cliente pagante e mostra no seu painel quantas trocas viraram clientes. Só sai sim ou não do seu servidor.
 
 **Express / Connect / Node http**
