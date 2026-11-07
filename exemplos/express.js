@@ -1,4 +1,4 @@
-// npm i express github:eloimdev/escambo-sdk#v0.6.0
+// npm i express github:eloimdev/escambo-sdk#v0.6.1
 import express from 'express';
 import {criarEscambo} from '@rande/escambo';
 

@@ -26,7 +26,7 @@ Vários SaaS podem morar no mesmo domínio. Cada um tem o seu App ID, e o SDK es
 ## Seu SaaS → Escambo
 
 ```
-POST https://dev.rande.dev/v1/escambo/sdk/ping
+POST https://escambo.rande.dev/v1/escambo/sdk/ping
 Content-Type: application/json
 X-Escambo-App: {app_id}
 X-Escambo-Ts: {ts}

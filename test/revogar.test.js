@@ -23,8 +23,8 @@ function cabecalhos(corpo, {tipo = 'revogar', ts = agora(), nonce = randomBytes(
 }
 const corpoPadrao = JSON.stringify({assinatura: 'as_123', usuario: 'u-1', plano: 'Plano M', plano_id: 'm', motivo: 'denuncia'});
 
-test('versão 0.6.0 e mensagens do protocolo', () => {
-  assert.equal(VERSAO, '0.6.0');
+test('versão 0.6.1 e mensagens do protocolo', () => {
+  assert.equal(VERSAO, '0.6.1');
   assert.equal(PROTOCOLO.revogar('A', 1, 'n', 'h'), 'escambo-revogar.v1.A.1.n.h');
   assert.equal(PROTOCOLO.revogarResp('A', 'n'), 'escambo-revogar-resp.v1.A.n');
 });

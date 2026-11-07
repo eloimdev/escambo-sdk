@@ -2,9 +2,9 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.6.0';
+export const VERSAO = '0.6.1';
 const SDK = 'escambo-node/' + VERSAO;
-const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
+const BASE_PADRAO = 'https://escambo.rande.dev/v1/escambo'; // produção (DEV/testes: ESCAMBO_BASE)
 
 const MIN = 60_000;
 const LIMITE_CORPO = 16384; // bytes aceitos no corpo de /fim e /revogar

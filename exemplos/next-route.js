@@ -1,4 +1,4 @@
-// Next.js (App Router): app/escambo/[...rota]/route.js — npm i github:eloimdev/escambo-sdk#v0.6.0
+// Next.js (App Router): app/escambo/[...rota]/route.js — npm i github:eloimdev/escambo-sdk#v0.6.1
 import {criarEscambo} from '@rande/escambo';
 
 const escambo = criarEscambo();

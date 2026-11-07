@@ -13,13 +13,13 @@ O SDK cuida de tudo o que liga o seu SaaS ao Escambo, sempre assinado com o seu 
 
 Ele não tem dependências e funciona no Node 18.17 ou mais novo.
 
-> Versão atual: **0.6.0**. Mantenha o SDK atualizado: 30 dias numa versão velha deixam o SaaS em dormência. Instale sempre numa tag fixa (`#v0.6.0`), nunca no HEAD do repositório.
+> Versão atual: **0.6.1**. Mantenha o SDK atualizado: 30 dias numa versão velha deixam o SaaS em dormência. Instale sempre numa tag fixa (`#v0.6.1`), nunca no HEAD do repositório.
 
 ## Passo a passo
 
 ### 1. Cadastre o SaaS
 
-1. Entre em **https://dev.rande.dev/apps/escambo/** com a sua conta Rande ID.
+1. Entre em **https://escambo.rande.dev/apps/escambo/** com a sua conta Rande ID.
 2. Vá em **Painel → Adicionar SaaS** e cole o link do seu site. A leitura monta a ficha com os planos.
 3. Revise e publique. O app segue direto para a verificação.
 
@@ -36,7 +36,7 @@ O Escambo checa sozinho a cada minuto e tem o botão **Checar agora**. Quando o 
 ### 3. Instale
 
 ```bash
-npm i github:eloimdev/escambo-sdk#v0.6.0
+npm i github:eloimdev/escambo-sdk#v0.6.1
 ```
 
 Fixe sempre a tag. Sem ela o npm instala o que estiver no HEAD naquele momento, e cada `npm i` pode trazer um código diferente. Para atualizar, troque a tag no comando (o aviso de atualização já mostra a tag nova).
@@ -202,6 +202,7 @@ Se usar outro caminho, por exemplo `/api/escambo`, informe o mesmo no painel em 
 
 ## Mudanças
 
+- **0.6.1** — o SDK passa a falar com a produção (`https://escambo.rande.dev/v1/escambo`) por padrão; `ESCAMBO_BASE` só para ambiente de teste.
 - **0.6.0** — `revogar()` e `POST {caminho}/revogar` (troca encerrada para os dois por denúncia, resgate que falhou ou reembolso); `/fim` e `/revogar` autenticam antes de ler o corpo, leem em bytes com limite de 16 KB e aceitam `req.rawBody`; `400 corpo_consumido` quando um body parser leu antes; `nonces` plugáveis; aviso de atualização com a tag fixa; README corrigido (Next.js usa `req`, `voltar` seguro, ordem do middleware).
 - **0.5.1** — oferta de saída estruturada (`nome`, `desconto`, `meses`).
 - **0.5.0** — `fimDaTroca()` e `POST {caminho}/fim`.
