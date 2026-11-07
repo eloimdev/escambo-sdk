@@ -173,6 +173,14 @@ export function criarEscambo(opcoes = {}) {
       const j = await chamar(app, 'ping', '/sdk/ping', {sdk: SDK, recursos: app.recursos, node: typeof process !== 'undefined' ? process.version : undefined});
       Object.assign(app.estado, {conectado: true, ultimoPing: Date.now(), ultimoErro: null, serverEstado: j.estado});
       log('ping', {app: app.appId, estado: j.estado, proximo_ping_s: j.proximo_ping_s});
+      // Saiu versão nova do SDK: avisa no log do servidor (uma vez por dia). Mais de 30 dias numa versão velha = dormência.
+      if (j.atualizar && Date.now() - (estado.avisouVersao || 0) > 24 * 60 * MIN) {
+        estado.avisouVersao = Date.now();
+        const msg = 'Escambo: saiu o SDK ' + j.sdk_ultima + ' (você usa ' + VERSAO + '). Atualize com: npm i github:eloimdev/escambo-sdk';
+        log('atualizacao', {atual: VERSAO, ultima: j.sdk_ultima});
+        if (!opcoes.log) console.warn(msg);
+      }
+      if (j.dormente) log('dormente', {app: app.appId});
       return {appId: app.appId, ok: true, ...j};
     } catch (e) {
       app.estado.ultimoErro = e.message || String(e);

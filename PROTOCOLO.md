@@ -39,7 +39,8 @@ X-Escambo-Assinatura: HMAC(segredo, "escambo-ping.v1.{app_id}.{ts}.{nonce}.{sha2
 Resposta:
 
 ```json
-{"ok": true, "estado": "conectado", "proximo_ping_s": 60, "servidor_ts": 1767312000}
+{"ok": true, "estado": "conectado", "proximo_ping_s": 60, "servidor_ts": 1767312000,
+ "sdk_ultima": "0.3.1", "atualizar": false, "dormente": false}
 ```
 
 Use `proximo_ping_s` para marcar o próximo ping.
@@ -73,3 +74,14 @@ O Escambo responde ao ping com `proximo_ping_s: 60`. Sem ping há 3 min, o estad
 Desconectado não é definitivo. O Escambo continua chamando `/status`: a cada 30 min e, depois de 40 min desconectado, de hora em hora. Qualquer ping aceito ou `/status` certo volta o estado para `conectado` na hora.
 
 Do lado do SDK, se o ping falhar ele tenta de novo a cada 1 min por 10 min, depois a cada 30 min e, passados 40 min, de hora em hora. No primeiro ping aceito volta para 60 s.
+
+## Versão e dormência
+
+O ping manda `sdk: "escambo-node/x.y.z"`. Quando sai uma versão nova, a resposta traz `atualizar: true` e o SDK escreve um aviso no log do servidor (uma vez por dia). O dono também vê o aviso no painel do Escambo, com um prompt pronto para a IA atualizar.
+
+O SaaS entra em dormência quando:
+
+- usa uma versão velha por mais de 30 dias depois que a nova saiu; ou
+- fica mais de 3 dias desconectado.
+
+Em dormência, o SaaS sai do catálogo e não recebe assinaturas novas. As que já existem continuam normalmente. Atualizou ou reconectou: volta na hora.

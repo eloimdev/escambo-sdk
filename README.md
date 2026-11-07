@@ -83,6 +83,8 @@ export async function GET(request) {
 
 No `responder`, a sua função `resgatar` recebe o `Request` em `req`.
 
+**Atualizações:** quando sai uma versão nova, o SDK avisa no log do servidor e o painel do Escambo mostra um prompt para a sua IA atualizar. Fique mais de 30 dias numa versão velha, ou mais de 3 dias desconectado, e o SaaS entra em dormência: sai do catálogo até você atualizar ou reconectar.
+
 **Se cair:** a conexão volta sozinha. Com o servidor de pé de novo, o primeiro batimento reconecta. Enquanto o ping falha, o SDK tenta a cada 1 min por 10 min, depois a cada 30 min e, passados 40 min, de hora em hora.
 
 **Serverless (Vercel, Netlify, Workers):** o processo não fica vivo, então não use `iniciar()`. Chame `await escambo.ping()` num cron de 1 em 1 minuto. Sem batimento, o Escambo mostra o SaaS como instável em 3 min e desconectado em 10 min.
