@@ -12,7 +12,7 @@ O SDK cuida de tudo o que liga o seu SaaS ao Escambo, sempre assinado com o seu 
 
 Ele não tem dependências e funciona no Node 18.17 ou mais novo.
 
-> Versão atual: **0.5.0**. Mantenha o SDK atualizado: 30 dias numa versão velha deixam o SaaS em dormência.
+> Versão atual: **0.5.1**. Mantenha o SDK atualizado: 30 dias numa versão velha deixam o SaaS em dormência.
 
 ## Passo a passo
 
@@ -48,7 +48,7 @@ npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 
 O SDK cuida das rotas no seu site (`/escambo/status`, `/escambo/resgatar`, `/escambo/situacao` e, desde a 0.4, `/escambo/conversao`) e do batimento.
 
-**Novo na 0.5 — fim da troca e oferta de saída no seu app.** Passe `fimDaTroca: async ({usuario, momento, expira, plano, oferta}) => {...}`. O Escambo avisa 7 dias antes do fim (`momento: "perto"`) e quando acaba (`"fim"`), uma vez cada, assinado. Se você cadastrou no painel uma oferta de saída marcada para "no seu app", ela vem em `oferta` (`{texto, codigo, link}`). O `texto` é o que você escreveu, do jeito que escreveu (o Escambo não interpreta percentuais): mostre na sua tela de renovação, e use `codigo`/`link` para aplicar o desconto no seu checkout. Rota: `POST {caminho}/fim` (no Next.js, exporte também o `POST`).
+**Novo na 0.5 — fim da troca e oferta de saída no seu app.** Passe `fimDaTroca: async ({usuario, momento, expira, plano, oferta}) => {...}`. O Escambo avisa 7 dias antes do fim (`momento: "perto"`) e quando acaba (`"fim"`), uma vez cada, assinado. Se você cadastrou no painel uma oferta de saída marcada para "no seu app", ela vem em `oferta`: `{nome, desconto, meses, texto, codigo, link}` (0.5.1). `desconto` é o percentual (5 a 90) e `meses` por quantos meses ele vale (`0` = enquanto a pessoa assinar): aplique esses números no seu checkout. `texto` é a mesma oferta em português, pronta para mostrar (ex.: "12% de desconto nos primeiros 3 meses"). Rota: `POST {caminho}/fim` (no Next.js, exporte também o `POST`).
 
 **Novo na 0.4 — conversão depois da troca.** Passe `conversao: async ({usuario}) => clientePagante(usuario)` (true/false). Uns dias depois que a troca termina, o Escambo pergunta (assinado) se aquela conta virou cliente pagante e mostra no seu painel quantas trocas viraram clientes. Só sai sim ou não do seu servidor.
 

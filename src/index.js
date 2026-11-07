@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.5.0';
+export const VERSAO = '0.5.1';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 

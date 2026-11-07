@@ -77,7 +77,7 @@ POST {url}{caminho}/fim   corpo JSON {assinatura,usuario,plano,plano_id,meses,ex
 X-Escambo-App, X-Escambo-Ts, X-Escambo-Nonce, X-Escambo-Assinatura: HMAC(segredo, "escambo-fim.v1.{app}.{ts}.{nonce}.{sha256(corpo)}")
 → 200 {"ok":true,"prova":HMAC(segredo,"escambo-fim-resp.v1.{app}.{nonce}")}
 ```
-`oferta` só vem quando o dono marcou a oferta de saída para aparecer no app dele (plano Pro ou Escala). Sem `fimDaTroca()`: 501.
+`oferta` só vem quando o dono marcou a oferta de saída para aparecer no app dele (plano Pro ou Escala). Formato (0.5.1): `{nome, desconto, meses, texto, codigo, link}` — `desconto` em % (5–90), `meses` 1–12 ou 0 (enquanto assinar). Sem `fimDaTroca()`: 501.
 
 ### Conversão depois da troca (0.4)
 
