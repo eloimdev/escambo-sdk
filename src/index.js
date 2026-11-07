@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.3.1';
+export const VERSAO = '0.3.2';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
@@ -120,14 +120,19 @@ export function criarEscambo(opcoes = {}) {
     const token = url.searchParams.get('token') || '';
     if (!/^esc_rg_[A-Za-z0-9_-]{30,40}$/.test(token)) return pagina(400, 'Link inválido', 'Este link de resgate está incompleto. Abra de novo pelo app do Escambo.');
     let info;
-    try { info = await chamar(app, 'resgate-consultar', '/sdk/resgate/consultar', {token}); }
-    catch (e) { return pagina(e.status === 409 ? 409 : 400, e.status === 409 ? 'Link já usado' : 'Não deu para resgatar', e.message); }
+    // O Escambo reserva o link por alguns minutos: outra aba com o mesmo link não libera o plano de novo.
+    try { info = await chamar(app, 'resgate-consultar', '/sdk/resgate/consultar', {token, reservar: true}); }
+    catch (e) { return pagina(e.status === 409 ? 409 : 400, e.codigo === 'ESCAMBO_TOKEN_EM_USO' ? 'Link em uso' : e.status === 409 ? 'Link já usado' : 'Não deu para resgatar', e.message); }
+    const reserva = info.reserva || undefined;
+    const liberar = () => chamar(app, 'resgate-liberar', '/sdk/resgate/liberar', {token, reserva}).catch(() => {});
     let r;
+    // Use ctx.token como chave de idempotência ao liberar o plano: se a confirmação falhar e a pessoa tentar de novo,
+    // a sua função não deve dar o plano duas vezes.
     try { r = await app.resgatar({...info.assinatura, appId: app.appId, token, req}); }
-    catch (e) { log('resgatar_erro', {erro: e?.message}); return pagina(500, 'Não deu para liberar o plano', e?.message || 'Tente de novo.'); }
-    if (r?.redirecionar) return {status: 302, headers: {Location: r.redirecionar, 'Cache-Control': 'no-store'}, corpo: ''};
-    if (!r?.usuario) return pagina(500, 'Não deu para liberar o plano', 'A função resgatar() precisa devolver { usuario } ou { redirecionar }.');
-    try { await chamar(app, 'resgate-confirmar', '/sdk/resgate/confirmar', {token, usuario: String(r.usuario)}); }
+    catch (e) { await liberar(); log('resgatar_erro', {app: app.appId, erro: e?.message}); return pagina(500, 'Não deu para liberar o plano', e?.message || 'Tente de novo.'); }
+    if (r?.redirecionar) { await liberar(); return {status: 302, headers: {Location: r.redirecionar, 'Cache-Control': 'no-store'}, corpo: ''}; }
+    if (!r?.usuario) { await liberar(); return pagina(500, 'Não deu para liberar o plano', 'A função resgatar() precisa devolver { usuario } ou { redirecionar }.'); }
+    try { await chamar(app, 'resgate-confirmar', '/sdk/resgate/confirmar', {token, reserva, usuario: String(r.usuario)}); }
     catch (e) { return pagina(400, 'Não deu para confirmar', e.message); }
     log('resgatado', {app: app.appId, assinatura: info.assinatura.id, teste: info.assinatura.teste});
     if (info.assinatura.teste) return pagina(200, 'Resgate de teste funcionou', 'A integração está certa. Pode voltar para o Escambo.');

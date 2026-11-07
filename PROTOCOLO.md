@@ -50,14 +50,16 @@ Use `proximo_ping_s` para marcar o próximo ping.
 As chamadas são assinadas como o ping, com a mensagem `escambo-{acao}.v1.{app_id}.{ts}.{nonce}.{sha256 do corpo}`.
 
 ```
-POST /v1/escambo/sdk/resgate/consultar   (acao = resgate-consultar)   {"token":"esc_rg_..."}
+POST /v1/escambo/sdk/resgate/consultar   (acao = resgate-consultar)   {"token":"esc_rg_...","reservar":true}
 → {"assinatura":{"id","plano","plano_id","meses","teste","comprador":{"nome"}}}
 
-POST /v1/escambo/sdk/resgate/confirmar   (acao = resgate-confirmar)   {"token":"esc_rg_...","usuario":"id-da-conta-no-saas"}
+POST /v1/escambo/sdk/resgate/confirmar   (acao = resgate-confirmar)   {"token":"esc_rg_...","reserva":"esc_rs_...","usuario":"id-da-conta-no-saas"}
+
+POST /v1/escambo/sdk/resgate/liberar     (acao = resgate-liberar)     {"token":"esc_rg_...","reserva":"esc_rs_..."}
 → {"ok":true,"assinatura":{"id","expira","teste"}}
 ```
 
-O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=esc_rg_…`. O token é de uso único e só vale para o App ID que o emitiu: depois de confirmado, `consultar` e `confirmar` respondem `409`.
+O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=esc_rg_…`. Com `reservar: true`, o `consultar` reserva o link por 3 min e devolve `reserva`. Outra consulta do mesmo link nesse tempo recebe `409 ESCAMBO_TOKEN_EM_USO`, e o `confirmar` precisa da mesma `reserva`. Se a pessoa precisar entrar antes (redirecionamento) ou a liberação falhar, o SDK chama `liberar`. O token é de uso único e só vale para o App ID que o emitiu: depois de confirmado, `consultar` e `confirmar` respondem `409`.
 
 ## Situação (Escambo → SaaS)
 

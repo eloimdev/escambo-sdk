@@ -119,7 +119,8 @@ No app, na etapa **Conecte o SDK**, toque em **Testar resgate**. O Escambo gera 
 
 ## Como o resgate é protegido
 
-- O token é de uso único. Ele só funciona no SaaS dono do App ID e morre quando o resgate é confirmado.
+- O token é de uso único. Enquanto uma aba está liberando o plano, o link fica reservado e outra aba recebe "Link em uso".
+- Use `ctx.token` como chave de idempotência no seu `resgatar()`: se a confirmação falhar e a pessoa tentar de novo, não dê o plano duas vezes. Ele só funciona no SaaS dono do App ID e morre quando o resgate é confirmado.
 - O SDK confere o token e confirma o resgate com chamadas assinadas com o seu token secreto, então o navegador do cliente não consegue forjar nada.
 - Toda chamada leva um nonce e o horário, e uma resposta capturada não serve de novo.
 - O Escambo cruza três sinais:
