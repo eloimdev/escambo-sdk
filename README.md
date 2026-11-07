@@ -16,24 +16,18 @@ Ele não tem dependências e funciona no Node 18.17 ou mais novo.
 ### 1. Cadastre o SaaS
 
 1. Entre em **https://dev.rande.dev/apps/escambo/** com a sua conta Rande ID.
-2. Cole o link do seu SaaS. A IA lê o site e preenche nome, descrição e planos.
-3. Revise o que veio e salve.
+2. Vá em **Painel → Adicionar SaaS** e cole o link do seu site. A leitura monta a ficha com os planos.
+3. Revise e publique. O app segue direto para a verificação.
 
 ### 2. Verifique o domínio
 
-No painel aparece um registro DNS para criar no seu provedor (Cloudflare, Registro.br, Route 53…):
+O app mostra um registro **TXT** para criar no DNS do seu domínio (nome `_escambo`, valor `escambo-verificacao=...`). O passo a passo por provedor (Cloudflare, Registro.br, Vercel, Hostinger, Route 53…) está em **[docs/DNS.md](docs/DNS.md)**. O app também tem um botão que copia um prompt pronto para você mandar para a sua IA.
 
-| Tipo | Nome | Valor |
-|---|---|---|
-| TXT | `_escambo.seu-dominio.com` | `escambo-verificacao=...` |
+O Escambo checa sozinho a cada minuto e tem o botão **Checar agora**. Quando o domínio é verificado:
 
-Para conferir se o DNS já propagou:
-
-```bash
-npx github:eloimdev/escambo-sdk dns seu-dominio.com
-```
-
-Depois toque em **Verificar domínio**. O painel mostra o **App ID** e o **segredo**. O segredo aparece só uma vez.
+- o SaaS entra no catálogo;
+- você ganha conchas de bônus;
+- o app gera o **App ID** e o **token** do SDK. O token fica só no seu painel.
 
 ### 3. Instale
 
@@ -44,7 +38,7 @@ npm i github:eloimdev/escambo-sdk
 Grave as chaves no `.env`. O comando não apaga nada que já estiver lá:
 
 ```bash
-npx escambo init --app esc_app_xxxxxxxx --segredo esc_sk_xxxxxxxx
+npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 ```
 
 ### 4. Monte a rota
@@ -83,7 +77,7 @@ npx escambo testar https://seu-dominio.com   # faz o mesmo pedido que o Escambo
 npx escambo ping                             # avisa o Escambo agora
 ```
 
-No painel, o status muda para **Conectado**. Na primeira conexão você ganha **30 conchas**.
+No app, o passo **Conecte o SDK** muda para **Conectado** assim que chega o primeiro ping.
 
 ## API
 

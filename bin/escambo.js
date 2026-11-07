@@ -22,7 +22,7 @@ function carregarEnv() {
 
 const ajuda = `escambo ${VERSAO}
 
-  escambo init --app esc_app_... --segredo esc_sk_...   grava as chaves no .env (sem apagar nada)
+  escambo init --app esc_app_... --token esc_sk_...     grava as chaves no .env (sem apagar nada)
   escambo dns seu-dominio.com                           confere o registro TXT _escambo
   escambo testar https://seu-dominio.com                faz o mesmo pedido que o Escambo faz à sua rota
   escambo ping                                          avisa o Escambo que o SDK está no ar
@@ -30,8 +30,8 @@ const ajuda = `escambo ${VERSAO}
 
 async function main() {
   if (comando === 'init') {
-    const app = flag('app'), segredo = flag('segredo'), caminho = flag('caminho');
-    if (!app || !segredo) return erro('Use: escambo init --app esc_app_... --segredo esc_sk_...');
+    const app = flag('app'), segredo = flag('token') || flag('segredo'), caminho = flag('caminho');
+    if (!app || !segredo) return erro('Use: escambo init --app esc_app_... --token esc_sk_...');
     const arq = path.resolve('.env');
     const atual = fs.existsSync(arq) ? fs.readFileSync(arq, 'utf8') : '';
     const linhas = [];
