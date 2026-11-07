@@ -69,3 +69,7 @@ X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-situacao.v1.{app}.{a
 ## Batimento
 
 O Escambo responde ao ping com `proximo_ping_s: 60`. Sem ping há 3 min, o estado vira `instavel`; há 10 min, `desconectado`.
+
+Desconectado não é definitivo. O Escambo continua chamando `/status`: a cada 30 min e, depois de 40 min desconectado, de hora em hora. Qualquer ping aceito ou `/status` certo volta o estado para `conectado` na hora.
+
+Do lado do SDK, se o ping falhar ele tenta de novo a cada 1 min por 10 min, depois a cada 30 min e, passados 40 min, de hora em hora. No primeiro ping aceito volta para 60 s.

@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.3.0';
+export const VERSAO = '0.3.1';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
@@ -67,7 +67,7 @@ export function criarEscambo(opcoes = {}) {
   }
   const unico = apps.size === 1 ? [...apps.values()][0] : null;
   const recursos = [...new Set([...apps.values()].flatMap((a) => a.recursos))];
-  const estado = {proximoPing: null, inicio: null, timer: null};
+  const estado = {proximoPing: null, inicio: null, timer: null, falhandoDesde: null};
 
   // ---------- chamada assinada do seu servidor para o Escambo ----------
   async function chamar(app, acao, rota, dados) {
@@ -187,17 +187,21 @@ export function criarEscambo(opcoes = {}) {
     return {ok: r.every((x) => x.ok), proximo_ping_s: Math.min(...r.map((x) => Number(x.proximo_ping_s) || 60)), apps: r};
   }
   // Ritmo: o Escambo pede um batimento por minuto. Se o seu servidor parar, em 3 min ele aparece como instável
-  // e em 10 min como desconectado. Falhou? tenta de novo em 1 min.
+  // e em 10 min como desconectado. Se o ping falhar (ex.: Escambo fora do ar), tenta de novo a cada 1 min por 10 min,
+  // depois a cada 30 min e, passados 40 min, de hora em hora. No primeiro ping aceito, volta para 60 s.
   function agendar(ms) {
     clearTimeout(estado.timer);
     estado.proximoPing = Date.now() + ms;
     estado.timer = setTimeout(rodada, ms);
     estado.timer.unref?.();
   }
-  async function rodada() {
-    const r = await ping();
-    agendar(r.ok ? Math.max(30, Number(r.proximo_ping_s) || 60) * 1000 : MIN);
+  function espera(r) {
+    if (r.ok) { estado.falhandoDesde = null; return Math.max(30, Number(r.proximo_ping_s) || 60) * 1000; }
+    estado.falhandoDesde ??= Date.now();
+    const parado = Date.now() - estado.falhandoDesde;
+    return parado < 10 * MIN ? MIN : parado < 40 * MIN ? 30 * MIN : 60 * MIN;
   }
+  async function rodada() { agendar(espera(await ping())); }
   /** Começa o batimento em segundo plano (servidor sempre ligado). Em serverless, chame ping() num cron de 1 min. */
   function iniciar() { if (estado.inicio) return; estado.inicio = Date.now(); agendar(0); }
   function parar() { clearTimeout(estado.timer); estado.timer = null; estado.inicio = null; }
