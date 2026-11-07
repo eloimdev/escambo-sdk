@@ -43,7 +43,9 @@ npx escambo init --app esc_app_xxxxxxxx --token esc_sk_xxxxxxxx
 
 ### 4. Monte o SDK: batimento + resgate
 
-O SDK cuida de três rotas no seu site (`/escambo/status`, `/escambo/resgatar` e `/escambo/situacao`) e do batimento.
+O SDK cuida das rotas no seu site (`/escambo/status`, `/escambo/resgatar`, `/escambo/situacao` e, desde a 0.4, `/escambo/conversao`) e do batimento.
+
+**Novo na 0.4 — conversão depois da troca.** Passe `conversao: async ({usuario}) => clientePagante(usuario)` (true/false). Uns dias depois que a troca termina, o Escambo pergunta (assinado) se aquela conta virou cliente pagante e mostra no seu painel quantas trocas viraram clientes. Só sai sim ou não do seu servidor.
 
 **Express / Connect / Node http**
 
@@ -134,8 +136,8 @@ No app, na etapa **Conecte o SDK**, toque em **Testar resgate**. O Escambo gera 
 
 | | |
 |---|---|
-| `criarEscambo({apps, appId, segredo, caminho, base, resgatar, situacao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. Vários SaaS no mesmo site: `apps: [{appId, segredo, resgatar?, situacao?}]`. |
-| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar` e `/situacao` e chama `next()` no resto. |
+| `criarEscambo({apps, appId, segredo, caminho, base, resgatar, situacao, conversao, depoisDoResgate, log})` | Cria o cliente. Os valores padrão vêm de `ESCAMBO_APP_ID`, `ESCAMBO_SEGREDO`, `ESCAMBO_CAMINHO` (`/escambo`) e `ESCAMBO_BASE`. Vários SaaS no mesmo site: `apps: [{appId, segredo, resgatar?, situacao?}]`. |
+| `escambo.middleware(req, res, next)` | Responde em `{caminho}/status`, `/resgatar`, `/situacao` e `/conversao` e chama `next()` no resto. |
 | `escambo.responder(request)` | Mesma coisa para `Request`. Devolve `Response` ou `null`. |
 | `escambo.ping()` | Manda um ping assinado por App ID. Com um só, devolve `{ok, estado, proximo_ping_s}`; com vários, `{ok, apps: [...]}`. |
 | `escambo.iniciar()` / `parar()` | Liga ou desliga os pings automáticos. |

@@ -2,7 +2,7 @@
 // Sem dependências. Protocolo v1 descrito em PROTOCOLO.md.
 import {createHmac, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 
-export const VERSAO = '0.3.2';
+export const VERSAO = '0.4.0';
 const SDK = 'escambo-node/' + VERSAO;
 const BASE_PADRAO = 'https://dev.rande.dev/v1/escambo';
 
@@ -22,6 +22,8 @@ export const PROTOCOLO = {
   chamada: (acao, app, ts, nonce, corpoHash) => `escambo-${acao}.v1.${app}.${ts}.${nonce}.${corpoHash}`,
   situacao: (app, assinatura, usuario, desafio, ts) => `escambo-situacao.v1.${app}.${assinatura}.${usuario}.${desafio}.${ts}`,
   situacaoResp: (app, assinatura, situacao, desafio, ts) => `escambo-situacao-resp.v1.${app}.${assinatura}.${situacao}.${desafio}.${ts}`,
+  conversao: (app, assinatura, usuario, desafio, ts) => `escambo-conversao.v1.${app}.${assinatura}.${usuario}.${desafio}.${ts}`,
+  conversaoResp: (app, assinatura, resultado, desafio, ts) => `escambo-conversao-resp.v1.${app}.${assinatura}.${resultado}.${desafio}.${ts}`,
 };
 
 /**
@@ -35,6 +37,7 @@ export const PROTOCOLO = {
  * @param {string} [opcoes.base]    API do Escambo
  * @param {(ctx: object) => Promise<object>} [opcoes.resgatar]  libera o plano para quem abriu o link de resgate (ctx.appId diz qual SaaS)
  * @param {(ctx: object) => Promise<string>} [opcoes.situacao]  diz se a assinatura continua ativa ('ativa' | 'cancelada')
+ * @param {(ctx: object) => Promise<boolean|string>} [opcoes.conversao]  (0.4) depois que a troca acaba: essa conta virou cliente pagante? true/false
  * @param {string} [opcoes.depoisDoResgate] para onde mandar a pessoa depois de liberar; padrão "/"
  * @param {(evento: string, dados?: object) => void} [opcoes.log]
  */
@@ -60,9 +63,9 @@ export function criarEscambo(opcoes = {}) {
     if (!/^esc_app_[0-9a-f]{20}$/.test(String(appId || ''))) throw new Error('Escambo: App ID inválido (' + String(appId || 'vazio') + ').');
     if (!/^esc_sk_[A-Za-z0-9_-]{40,}$/.test(String(segredo || ''))) throw new Error('Escambo: segredo ausente ou inválido para ' + appId + '.');
     if (apps.has(appId)) throw new Error('Escambo: App ID repetido (' + appId + ').');
-    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao;
-    apps.set(appId, {appId, segredo, resgatar, situacao, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
-      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : [])],
+    const resgatar = a.resgatar || opcoes.resgatar, situacao = a.situacao || opcoes.situacao, conversao = a.conversao || opcoes.conversao;
+    apps.set(appId, {appId, segredo, resgatar, situacao, conversao, depois: a.depoisDoResgate || opcoes.depoisDoResgate || '/',
+      recursos: ['ping', ...(resgatar ? ['resgate'] : []), ...(situacao ? ['situacao'] : []), ...(conversao ? ['conversao'] : [])],
       estado: {conectado: false, ultimoPing: null, ultimoErro: null, serverEstado: null}});
   }
   const unico = apps.size === 1 ? [...apps.values()][0] : null;
@@ -110,6 +113,23 @@ export function criarEscambo(opcoes = {}) {
     if (!['ativa', 'cancelada', 'desconhecida'].includes(sit)) sit = 'desconhecida';
     return json(200, {situacao: sit, prova: hmac(app.segredo, PROTOCOLO.situacaoResp(app.appId, assinatura, sit, desafio, ts))});
   }
+  // GET {caminho}/conversao (0.4) — depois que a troca acaba, o Escambo pergunta se aquela conta virou cliente pagante.
+  // Só responde sim/não: nenhum dado da pessoa sai do seu servidor.
+  async function rotaConversao(url, h) {
+    const desafio = url.searchParams.get('desafio') || '', ts = Number(url.searchParams.get('ts'));
+    const assinatura = url.searchParams.get('assinatura') || '', usuario = url.searchParams.get('usuario') || '';
+    const app = apps.get(h['x-escambo-app']);
+    if (!app || !/^[0-9a-f]{32}$/.test(desafio) || !Number.isInteger(ts) || Math.abs(Date.now() / 1000 - ts) > 300 ||
+      !iguais(h['x-escambo-assinatura'], hmac(app.segredo, PROTOCOLO.conversao(app.appId, assinatura, usuario, desafio, ts))))
+      return json(401, {erro: 'assinatura'});
+    if (!app.conversao) return json(501, {erro: 'conversao_nao_configurada'});
+    let resultado = 'desconhecida';
+    try {
+      const v = await app.conversao({appId: app.appId, assinatura, usuario});
+      resultado = v === true || v === 'pagante' ? 'pagante' : v === false || v === 'nao' ? 'nao' : 'desconhecida';
+    } catch (e) { log('conversao_erro', {app: app.appId, erro: e?.message}); }
+    return json(200, {resultado, prova: hmac(app.segredo, PROTOCOLO.conversaoResp(app.appId, assinatura, resultado, desafio, ts))});
+  }
   // GET {caminho}/resgatar?app=…&token=… — a pessoa abre o link que recebeu no Escambo, logada no seu SaaS.
   // 1) confere o token no Escambo  2) chama a sua função resgatar()  3) confirma no Escambo (o token morre aí).
   // "app" diz qual dos SaaS deste domínio vai liberar o plano.
@@ -152,6 +172,7 @@ export function criarEscambo(opcoes = {}) {
     if (method !== 'GET') return null;
     if (url.pathname === caminho + '/status') return rotaStatus(url, lerHeaders(headers));
     if (url.pathname === caminho + '/situacao') return rotaSituacao(url, lerHeaders(headers));
+    if (url.pathname === caminho + '/conversao') return rotaConversao(url, lerHeaders(headers));
     if (url.pathname === caminho + '/resgatar') return rotaResgatar(url, req);
     return null;
   }

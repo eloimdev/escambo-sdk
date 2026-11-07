@@ -4,6 +4,8 @@ export declare const VERSAO: string;
 type Resgatar = (ctx: {appId: string; id: string; plano: string; plano_id: string; meses: number; teste: boolean; comprador: {nome: string}; token: string; req: unknown}) =>
     Promise<{usuario: string; destino?: string} | {redirecionar: string}>;
 type Situacao = (ctx: {appId: string; assinatura: string; usuario: string}) => Promise<'ativa' | 'cancelada' | 'desconhecida'>;
+/** 0.4: depois que a troca acaba, essa conta virou cliente pagante? (true/false; só sim/não sai do seu servidor) */
+type Conversao = (ctx: {appId: string; assinatura: string; usuario: string}) => Promise<boolean | 'pagante' | 'nao' | 'desconhecida'>;
 /** Um SaaS no Escambo. Vários SaaS do mesmo domínio = vários itens, cada um com o seu App ID. */
 export interface AppEscambo {
   appId: string;
@@ -11,6 +13,7 @@ export interface AppEscambo {
   token?: string;
   resgatar?: Resgatar;
   situacao?: Situacao;
+  conversao?: Conversao;
   depoisDoResgate?: string;
 }
 export interface OpcoesEscambo {
@@ -24,6 +27,7 @@ export interface OpcoesEscambo {
   depoisDoResgate?: string;
   resgatar?: Resgatar;
   situacao?: Situacao;
+  conversao?: Conversao;
 }
 export interface RespostaPing {
   ok: boolean;

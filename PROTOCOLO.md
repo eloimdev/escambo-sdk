@@ -67,6 +67,17 @@ O link que o comprador abre é `{origem}{caminho}/resgatar?app={app_id}&token=es
 GET {url}{caminho}/situacao?assinatura=&usuario=&desafio=&ts=
 X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-situacao.v1.{app}.{assinatura}.{usuario}.{desafio}.{ts}")
 → {"situacao":"ativa"|"cancelada"|"desconhecida","prova":HMAC(segredo,"escambo-situacao-resp.v1.{app}.{assinatura}.{situacao}.{desafio}.{ts}")}
+
+### Conversão depois da troca (0.4)
+
+De 3 a 60 dias depois do fim da troca (de novo a cada 7 dias sem resposta definitiva), só se o SDK anunciar o recurso `conversao`:
+
+```
+GET {url}{caminho}/conversao?assinatura=&usuario=&desafio=&ts=
+X-Escambo-App, X-Escambo-Assinatura: HMAC(segredo, "escambo-conversao.v1.{app}.{assinatura}.{usuario}.{desafio}.{ts}")
+→ {"resultado":"pagante"|"nao"|"desconhecida","prova":HMAC(segredo,"escambo-conversao-resp.v1.{app}.{assinatura}.{resultado}.{desafio}.{ts}")}
+```
+Sem `conversao()` configurada: 501.
 ```
 
 ## Batimento
